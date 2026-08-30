@@ -1,4 +1,4 @@
-DejaVu Sans Bold (DejaVuSans-Bold.ttf)
+DejaVu Sans Mono Bold (DejaVuSansMono-Bold.ttf)
 Zdroj: https://dejavu-fonts.github.io/
 
 Licence: Bitstream Vera License (viz nize) - povoluje pouziti, kopirovani,

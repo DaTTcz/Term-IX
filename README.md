@@ -84,9 +84,9 @@ Zdrojova grafika je v `assets/`:
 - `assets/icons/hicolor/<velikost>x<velikost>/apps/term-ix.png` –
   stejna znacka v standardni freedesktop.org velikostni rade
   (16 az 512 px) pro instalaci na Linuxu, viz `packaging/term-ix.desktop`.
-- `assets/fonts/DejaVuSans-Bold.ttf` – font pouzity pro vypis verze/autora
-  na splash obrazovce (permisivni Bitstream Vera licence, viz
-  `assets/fonts/LICENSE-DejaVu.txt`).
+- `assets/fonts/DejaVuSansMono-Bold.ttf` – monospace font pro "terminalovy"
+  vypis verze/autora na splash obrazovce (permisivni Bitstream Vera
+  licence, viz `assets/fonts/LICENSE-DejaVu.txt`).
 
 Chcete-li obrazky prehenerovat po zmene loga, staci znovu spustit
 prikazy z tohoto oddilu (napr. `convert term-ix_ico.png -resize 128x128 ...`)
@@ -94,12 +94,16 @@ pro kazdou pozadovanou velikost.
 
 ### Splash obrazovka
 
-Pri startu (pokud neni pouzity prepinac `--no-splash`) se na kratko
-(cca 1.8 s, nebo do stisku klavesy/kliknuti) zobrazi samostatne
-bezramecke okno s logem a textem "Term-IX vX.Y.Z" + jmeno autora
-vypalenym primo do obrazku (crate `termx-splash`, pouziva `minifb` pro
-okno a `fontdue` pro vykresleni textu). Teprve po jeho zavreni aplikace
-prevezme terminal a spusti hlavni TUI.
+Pri startu (pokud neni pouzity prepinac `--no-splash`) se zobrazi
+samostatne bezramecke okno s logem. Pod nim se "terminalovym" zpusobem
+- pismenko po pismenku, monospace pismem, s kurzorem - vypise
+`Term-IX vX.Y.Z` a jmeno autora. Samotne psani (~30 ms/znak) tak
+prirozene vytvori kratkou startovaci pauzu bez pocitu, ze se ceka
+naprazdno: kurzor je behem psani plny, mezi radky a po dopsani obou
+radku par-krat blikne a okno se pak samo zavre (nebo hned po
+stisku klavesy/kliknuti). Implementace je v `termx-splash` (`minifb`
+pro okno, `fontdue` pro rasterizaci pisma). Teprve po zavreni splash
+okna aplikace prevezme terminal a spusti hlavni TUI.
 
 Pokud se graficke okno nepodari otevrit (napr. beh pres SSH bez
 X11/Wayland, headless server), splash se tise preskoci a aplikace
