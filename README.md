@@ -23,8 +23,9 @@ Term-IX/
     ├── termx-vault/       – sifrovane ulozeni serveru (AES-256-GCM + Argon2id)
     ├── termx-update/      – self-update z GitHub Releases
     ├── termx-ssh/         – SSH modul (prvni implementace ProtocolModule)
-    └── termx-tui/         – terminalove UI (ratatui) - seznam serveru,
-                              formulare, napojeni na moduly pres registr
+    ├── termx-tui/         – terminalove UI (ratatui) - seznam serveru,
+    │                        formulare, napojeni na moduly pres registr
+    └── termx-splash/      – uvodni splash okno s logem (mimo terminal)
 ```
 
 ### Jak pridat novy protokol (napr. seriovou linku / FTP)
@@ -67,6 +68,44 @@ pripadne stahne a nahradi bezici binarku. Release proces
 (`.github/workflows/release.yml`) po vytvoreni tagu `vX.Y.Z`
 automaticky zabuildi a nahraje binarky pro Windows i Linux.
 
+## Loga a ikony
+
+Zdrojova grafika je v `assets/`:
+
+- `assets/term-ix_logo.png` – plne logo + napis "TERM-IX" (pouzito jako
+  splash obrazek).
+- `assets/term-ix_ico.png` – samotna znacka (hexagon + X), zdroj pro
+  vsechny generovane ikony.
+- `assets/icons/term-ix.ico` – multi-rozlisenova Windows ikona
+  (16/32/48/64/128/256 px), vygenerovana z `term-ix_ico.png` pres
+  ImageMagick (`convert term-ix_ico.png -define icon:auto-resize=... term-ix.ico`).
+  `build.rs` ji pri buildu na Windows zabuduje do `term-ix.exe`
+  (crate `winres`) - takze exe ma vlastni ikonu v prohlizeci/na hlavnim panelu.
+- `assets/icons/hicolor/<velikost>x<velikost>/apps/term-ix.png` –
+  stejna znacka v standardni freedesktop.org velikostni rade
+  (16 az 512 px) pro instalaci na Linuxu, viz `packaging/term-ix.desktop`.
+- `assets/fonts/DejaVuSans-Bold.ttf` – font pouzity pro vypis verze/autora
+  na splash obrazovce (permisivni Bitstream Vera licence, viz
+  `assets/fonts/LICENSE-DejaVu.txt`).
+
+Chcete-li obrazky prehenerovat po zmene loga, staci znovu spustit
+prikazy z tohoto oddilu (napr. `convert term-ix_ico.png -resize 128x128 ...`)
+pro kazdou pozadovanou velikost.
+
+### Splash obrazovka
+
+Pri startu (pokud neni pouzity prepinac `--no-splash`) se na kratko
+(cca 1.8 s, nebo do stisku klavesy/kliknuti) zobrazi samostatne
+bezramecke okno s logem a textem "Term-IX vX.Y.Z" + jmeno autora
+vypalenym primo do obrazku (crate `termx-splash`, pouziva `minifb` pro
+okno a `fontdue` pro vykresleni textu). Teprve po jeho zavreni aplikace
+prevezme terminal a spusti hlavni TUI.
+
+Pokud se graficke okno nepodari otevrit (napr. beh pres SSH bez
+X11/Wayland, headless server), splash se tise preskoci a aplikace
+pokracuje rovnou do terminaloveho rozhrani - nikdy nesmi zablokovat
+spusteni.
+
 ## Sestaveni
 
 Vyzaduje Rust (stable) - <https://rustup.rs>.
@@ -84,13 +123,17 @@ cargo run --release
 
 Pri prvnim spusteni aplikace vyzve k nastaveni hlavniho hesla trezoru.
 
+Prepinace: `--no-splash` preskoci uvodni okno s logem, `--no-update`
+preskoci kontrolu aktualizaci.
+
 ## Dulezita poznamka k tomuto commitu
 
 Tato pocatecni kostra byla vytvorena v izolovanem prostredi bez
 pristupu na crates.io, takze **zde nebylo mozne spustit `cargo build`
 / `cargo check`** a kod tak neprosel automatickym overenim kompilace
-(zejmena crate `russh` v `termx-ssh` mel v ruznych verzich mirne
-odlisne API - viz komentar v `crates/termx-ssh/src/lib.rs`). Az
+(zejmena crate `russh` v `termx-ssh` a `minifb`/`fontdue` v
+`termx-splash` mely v ruznych verzich mirne odlisne API - viz komentare
+v prislusnych souborech). Az
 spustite `cargo build` poprve u sebe, je mozne, ze bude potreba
 doladit par nazvu metod/typu. Architektura (moduly, trait
 `ProtocolModule`, sifrovani, TUI) tim dotcena neni - jde jen o

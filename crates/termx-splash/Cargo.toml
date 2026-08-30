@@ -1,0 +1,15 @@
+[package]
+name = "termx-splash"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Term-IX splash obrazovka (logo + verze + autor) zobrazena pred startem TUI"
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+minifb = "0.27"
+fontdue = "0.9"

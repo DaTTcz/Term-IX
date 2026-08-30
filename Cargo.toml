@@ -6,6 +6,7 @@ members = [
     "crates/termx-update",
     "crates/termx-ssh",
     "crates/termx-tui",
+    "crates/termx-splash",
 ]
 
 [workspace.package]
@@ -21,6 +22,7 @@ termx-vault = { path = "crates/termx-vault" }
 termx-update = { path = "crates/termx-update" }
 termx-ssh = { path = "crates/termx-ssh" }
 termx-tui = { path = "crates/termx-tui" }
+termx-splash = { path = "crates/termx-splash" }
 
 anyhow = "1"
 thiserror = "2"
@@ -51,9 +53,15 @@ termx-vault = { workspace = true }
 termx-update = { workspace = true }
 termx-ssh = { workspace = true }
 termx-tui = { workspace = true }
+termx-splash = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 rpassword = "7"
+
+# Vklada ikonu (assets/icons/term-ix.ico) do vysledneho .exe - resi se jen
+# pri buildu na/pro Windows, viz build.rs.
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"

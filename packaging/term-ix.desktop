@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Term-IX
+GenericName=Terminalovy klient
+Comment=Modularni terminalovy klient (SSH/Serial/FTP...)
+Exec=term-ix
+Icon=term-ix
+Terminal=true
+Categories=Network;TerminalEmulator;RemoteAccess;
+
+# Rucni instalace na Linuxu (bez baliku .deb/.rpm):
+#   cp packaging/term-ix.desktop ~/.local/share/applications/
+#   for sz in 16 32 48 64 128 256 512; do
+#     mkdir -p ~/.local/share/icons/hicolor/${sz}x${sz}/apps
+#     cp assets/icons/hicolor/${sz}x${sz}/apps/term-ix.png \
+#        ~/.local/share/icons/hicolor/${sz}x${sz}/apps/term-ix.png
+#   done
+#   gtk-update-icon-cache ~/.local/share/icons/hicolor 2>/dev/null || true

@@ -19,11 +19,22 @@ struct Cli {
     /// Preskoci kontrolu aktualizaci pri startu.
     #[arg(long)]
     no_update: bool,
+
+    /// Preskoci uvodni splash obrazovku s logem.
+    #[arg(long)]
+    no_splash: bool,
 }
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::try_init().ok();
     let cli = Cli::parse();
+
+    if !cli.no_splash {
+        termx_splash::show_splash(termx_splash::SplashInfo {
+            version: env!("CARGO_PKG_VERSION"),
+            author: "DaTTcz",
+        });
+    }
 
     if !cli.no_update {
         check_for_updates();

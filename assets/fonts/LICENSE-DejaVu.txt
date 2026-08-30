@@ -1,0 +1,20 @@
+DejaVu Sans Bold (DejaVuSans-Bold.ttf)
+Zdroj: https://dejavu-fonts.github.io/
+
+Licence: Bitstream Vera License (viz nize) - povoluje pouziti, kopirovani,
+upravu i distribuci fontu vcetne zabudovani do software. Font se nesmi
+prodavat samostatne "jen jako font" a pri zmenach nesmi nest jmena
+"Bitstream"/"Vera".
+
+Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved.
+Bitstream Vera is a trademark of Bitstream, Inc.
+DejaVu changes are in public domain.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of the fonts accompanying this license ("Fonts") and associated
+documentation files (the "Font Software"), to reproduce and distribute the
+Font Software, including without limitation the rights to use, copy, merge,
+publish, distribute, and/or sell copies of the Font Software, and to permit
+persons to whom the Font Software is furnished to do so, subject to the
+conditions described in the full DejaVu/Bitstream Vera license:
+https://dejavu-fonts.github.io/License.html
