@@ -1,0 +1,16 @@
+[package]
+name = "termx-tui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Term-IX TUI (ratatui) - hlavni obrazovka, seznam serveru, dialogy"
+
+[dependencies]
+termx-core = { workspace = true }
+termx-vault = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+ratatui = "0.29"
+crossterm = "0.28"

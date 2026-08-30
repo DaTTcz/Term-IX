@@ -1,0 +1,18 @@
+[package]
+name = "termx-ssh"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Term-IX SSH protocol module (russh - cisty Rust, bez zavislosti na OpenSSL)"
+
+[dependencies]
+termx-core = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+async-trait = "0.1"
+crossterm = "0.28"
+russh = "0.44"
+russh-keys = "0.44"

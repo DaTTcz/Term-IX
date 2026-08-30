@@ -1,0 +1,60 @@
+name: Release
+
+# Spousti se pri vytvoreni tagu ve tvaru "vX.Y.Z" (napr. v0.1.0).
+# Zabuildi term-ix pro Windows i Linux a nahraje binarky do GitHub Release
+# pod nazvy obsahujicimi target triple - presne to, co pri startu hleda
+# self-update modul (crates/termx-update) pres crate `self_update`.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Nainstalovat Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build (release)
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin term-ix
+
+      - name: Zabalit (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dest = "term-ix-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/term-ix.exe" -DestinationPath $dest
+          echo "ASSET=$dest" >> $env:GITHUB_ENV
+
+      - name: Zabalit (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          asset="term-ix-${{ matrix.target }}.tar.gz"
+          tar -C "target/${{ matrix.target }}/release" -czf "$asset" term-ix
+          echo "ASSET=$asset" >> "$GITHUB_ENV"
+
+      - name: Nahrat do GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+          draft: false
+          generate_release_notes: true

@@ -1,0 +1,17 @@
+[package]
+name = "termx-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Term-IX core: datove modely, ProtocolModule trait, konfigurace"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+directories = { workspace = true }
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }

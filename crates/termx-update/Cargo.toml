@@ -1,0 +1,18 @@
+[package]
+name = "termx-update"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Term-IX self-update z GitHub Releases (github.com/DaTTcz/Term-IX)"
+
+[dependencies]
+anyhow = { workspace = true }
+self_update = { version = "0.41", default-features = false, features = [
+    "rustls",
+    "archive-tar",
+    "archive-zip",
+    "compression-flate2",
+    "compression-zip-deflate",
+] }
