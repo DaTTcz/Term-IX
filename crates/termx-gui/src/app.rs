@@ -1164,7 +1164,7 @@ impl MainApp {
                                 } else {
                                     let outline_color =
                                         if response.hovered() { theme::ACCENT } else { ui.visuals().text_color() };
-                                    ui.painter().rect_stroke(square, rounding, egui::Stroke::new(1.3, outline_color));
+                                    ui.painter().rect_stroke(square, rounding, egui::Stroke::new(1.3_f32, outline_color));
                                 }
                                 let response = response.on_hover_text(hover);
                                 if response.clicked() {
