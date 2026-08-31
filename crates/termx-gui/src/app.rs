@@ -689,46 +689,65 @@ impl MainApp {
                     _ => None,
                 };
                 let is_dead = conn_state == Some(terminal::ConnState::Disconnected);
-                // Kdyz je tab "mrtvy", nazev zacina dvema mezerami navic -
-                // udela to v tlacitku misto pro puntik (viz nize), aby ho
-                // slo vykreslit PRIMO PRES pozadi tlacitka/pilulky, ne
-                // vedle ni (puvodni verze byla mimo tab a nebylo zjevne,
-                // ze k nemu patri - zpetna vazba "puntík je mimo tab
-                // takže není zřejmé že je k němu").
-                let label_text = if is_dead { format!("  {title}") } else { title.clone() };
-                let label = egui::RichText::new(label_text);
 
-                ui.horizontal(|ui| {
-                    let resp = ui.selectable_label(selected, label);
-                    if is_dead {
-                        // Cerveny puntik VYKRESLENY PRIMO NA tlacitko tabu
-                        // (uvnitr `resp.rect`, u leveho okraje - presne v
-                        // mezere, kterou pro nej `label_text` vyse
-                        // pripravil), ne jako samostatny znak/widget vedle
-                        // nej. Vykresleny kruh (ne textovy znak - viz
-                        // predchozi commity a zpetna vazba k nim) na
-                        // zadnem pismu nezavisi, takze je zaruceno, ze
-                        // bude presne v pozadovane barve a velikosti.
-                        let pad = ui.spacing().button_padding.x;
-                        let dot_center = egui::pos2(resp.rect.left() + pad + 4.0, resp.rect.center().y);
-                        ui.painter().circle_filled(dot_center, 4.0, theme::DANGER);
-                    }
-                    if resp.clicked() {
-                        to_select = Some(idx);
-                    }
-                    // Obycejne ASCII "X" (ne Unicode "✕"/Dingbats "×") -
-                    // to druhe se v pouzitem pismu vykreslovalo jako
-                    // ctverecek (chybejici znak), viz zpetna vazba
-                    // "ikonka vedle tabu co ho zavírá by měla mít křížek
-                    // místo čtverečku".
-                    if !matches!(kind, TabKind::Home) && ui.small_button("X").clicked() {
-                        if conn_state == Some(terminal::ConnState::Connected) {
-                            to_confirm_close = Some(CloseTabConfirm { idx, title });
-                        } else {
-                            to_close = Some(idx);
-                        }
-                    }
-                });
+                // Cely tab (puntik + nazev + zavirci "X") je JEDEN
+                // spolecny `Frame` se sdilenym pozadim - drive to byly
+                // dva samostatne widgety (`selectable_label` a
+                // `small_button`), takze "X" mel svuj vlastni oddeleny
+                // sedy ctverecek vedle pilulky s nazvem (zpetna vazba
+                // "ikonka zavření by mohla být také součástí tabu má
+                // šedé pozadí tak by to vypadalo dobře"). Barva pozadi
+                // se preberi primo z aktualniho tematu - stejna, jakou
+                // by drive pouzil `selectable_label` (vybrany) nebo
+                // `small_button` (nevybrany), takze vzhled zustava
+                // konzistentni se zbytkem UI.
+                let bg = if selected { ui.visuals().selection.bg_fill } else { ui.visuals().widgets.inactive.bg_fill };
+
+                egui::Frame::none().fill(bg).rounding(egui::Rounding::same(4.0)).inner_margin(egui::Margin::symmetric(8.0, 4.0)).show(
+                    ui,
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            // O trochu vetsi mezera nez vychozi - jak si
+                            // uzivatel vsimnul, s puvodni bylo cislo/puntik
+                            // az moc u textu (zpetna vazba "ještě trochu
+                            // posunout text").
+                            ui.spacing_mut().item_spacing.x = 6.0;
+
+                            if is_dead {
+                                // Vykresleny puntik (ne textovy znak - viz
+                                // predchozi commity a zpetna vazba k nim),
+                                // ted jako radna soucast stejneho `Frame`
+                                // jako zbytek tabu, takze uz k nemu
+                                // vizualne jasne patri.
+                                let (rect, _) =
+                                    ui.allocate_exact_size(egui::vec2(8.0, ui.spacing().interact_size.y), egui::Sense::hover());
+                                ui.painter().circle_filled(rect.center(), 4.0, theme::DANGER);
+                            }
+
+                            if ui.add(egui::Label::new(title.as_str()).sense(egui::Sense::click())).clicked() {
+                                to_select = Some(idx);
+                            }
+
+                            if !matches!(kind, TabKind::Home) {
+                                // Obycejne ASCII "X" (ne Unicode "✕"/Dingbats
+                                // "×") - to druhe se v pouzitem pismu
+                                // vykreslovalo jako ctverecek (chybejici
+                                // znak). `.frame(false)` - zadne vlastni
+                                // (oddelene) pozadi tlacitka, splyne s
+                                // `Frame` vyse.
+                                let close_clicked =
+                                    ui.add(egui::Button::new(egui::RichText::new("X").small()).frame(false)).clicked();
+                                if close_clicked {
+                                    if conn_state == Some(terminal::ConnState::Connected) {
+                                        to_confirm_close = Some(CloseTabConfirm { idx, title: title.clone() });
+                                    } else {
+                                        to_close = Some(idx);
+                                    }
+                                }
+                            }
+                        });
+                    },
+                );
             }
         });
 
