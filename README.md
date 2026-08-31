@@ -5,8 +5,11 @@ FTP, ...) inspirovany aplikaci MobaXterm - napsany v Rustu, pro
 Windows i Linux.
 
 > Stav: **rana faze vyvoje (MVP kostra)**. Funguje SSH modul s
-> prihlasenim jmenem/heslem, sifrovane ulozeni serveru a zaklad pro
-> self-update. Dalsi protokoly a funkce se budou pridavat postupne.
+> prihlasenim jmenem/heslem, sifrovane ulozeni serveru, zaklad pro
+> self-update a nove i graficke uzivatelske rozhrani (viz nize) -
+> vestaveny terminal v nem je zatim jen nahradni obrazovka, skutecne
+> pripojeni pres GUI je navazujici krok. Dalsi protokoly a funkce se
+> budou pridavat postupne.
 
 ## Architektura
 
@@ -19,14 +22,26 @@ Term-IX/
 ├── src/main.rs          – binarka: propoji vse dohromady, CLI, self-update
 └── crates/
     ├── termx-core/       – sdilene typy: Session, AuthMethod, trait
-    │                       ProtocolModule, cross-platform cesty (AppPaths)
+    │                       ProtocolModule, ModuleRegistry, cross-platform
+    │                       cesty (AppPaths)
     ├── termx-vault/       – sifrovane ulozeni serveru (AES-256-GCM + Argon2id)
     ├── termx-update/      – self-update z GitHub Releases
     ├── termx-ssh/         – SSH modul (prvni implementace ProtocolModule)
-    ├── termx-tui/         – terminalove UI (ratatui) - seznam serveru,
-    │                        formulare, napojeni na moduly pres registr
+    ├── termx-gui/         – hlavni graficke rozhrani (egui/eframe) - horni
+    │                        menu, strom serveru vlevo, taby vpravo
     └── termx-splash/      – uvodni splash okno s logem (mimo terminal)
 ```
+
+**Pivot z TUI na GUI:** puvodni `termx-tui` (ratatui, terminalove
+ovladane textovym rozhranim) byl nahrazen `termx-gui` (egui/eframe,
+skutecne graficke okno ve stylu MobaXtermu). Duvod: uzivatel potreboval
+administraci vice serveru najednou (strom, slozky, razeni, prejmenovani)
+a soubezne otevrene taby vedle sebe, coz je v cistem TUI nepohodlne, a
+zejmena aby se terminalovy tab otevrel "prazdny" - bez nativniho okna
+OS a jeho vlastniho menu (napr. Windows Terminal profil dropdown), ktere
+by prosvitalo skrz. `ModuleRegistry` (registr protokolovych modulu) byl
+kvuli tomu presunut z `termx-tui` do `termx-core`, aby ho mohl pouzivat
+jak GUI, tak pripadne v budoucnu i jine rozhrani.
 
 ### Jak pridat novy protokol (napr. seriovou linku / FTP)
 
@@ -38,7 +53,55 @@ Term-IX/
 4. Rozsirit `termx_core::Protocol` o novou variantu (a pripadne
    `AuthMethod`, pokud protokol potrebuje jiny typ prihlaseni).
 
-Zbytek aplikace (TUI, vault, update) se timto nemusi menit.
+Zbytek aplikace (GUI, vault, update) se timto nemusi menit.
+
+## Graficke rozhrani (termx-gui)
+
+Hlavni okno ma tri casti, podobne MobaXtermu:
+
+- **Horni menu** (Terminal / Sessions / View / Tools / Settings / Help)
+  - zatim s nejzakladnejsimi polozkami (novy server, nova slozka,
+    otevreni Nastaveni jako tabu, ukonceni aplikace); `View`/`Tools`
+    jsou pripravene prazdne polozky pro pristi kroky.
+- **Levy panel** – strom vsech ulozenych serveru: slozky (i uplne
+  prazdne, viz nize) se rozbaluji/sbaluji, kazdy server i slozka maji
+  kontextove menu pravym tlacitkem (otevrit, prejmenovat, presunout do
+  jine slozky, smazat - slozku jen pokud je prazdna). Strom se staví
+  znovu kazdy snimek primo z dat trezoru, takze zadny zvlastni stav
+  stromu neni potreba drzet synchronizovany.
+- **Pravy hlavni prostor** – lista otevrenych tabu nahore + obsah
+  aktivniho tabu. Typy tabu:
+  - **Domů** – vzdy pritomny uvodni tab (nejde zavrit).
+  - **Nastaveni** – samostatny tab (ne dialogove okenko), otevira se
+    pres menu Settings → Predvolby..., chova se stejne jako ostatni
+    taby (da se prepnout, zavrit apod.).
+  - **Spojeni** (jeden tab na kazdy otevreny server) – **v teto verzi
+    je to zatim jen informacni nahradni obrazovka** (jmeno/host/port
+    serveru + vysvetlujici text). Skutecny vestaveny emulator
+    terminalu (planovane pres `alacritty_terminal`, napojeny na
+    `termx_core::ProtocolModule`/`termx-ssh` misto puvodniho primeho
+    prevzeti stdin/stdout) je navazujici krok - dulezite je, ze uz
+    ted se tab otevira jako cista plocha uvnitr okna aplikace, ne
+    jako nativni okno OS s vlastnim menu.
+
+### Slozky ve stromu serveru
+
+`Session.group` drzi cestu k slozce jako retezec se segmenty
+oddelenymi lomitkem (napr. `"Prace/PBX"` pro slozku PBX vnorenou v
+Praci). Aby mohla existovat i uplne prazdna slozka (pripravena predem,
+bez jedineho serveru uvnitr - stejne jako v MobaXtermu), ma
+`VaultData` navic pole `folders: Vec<String>` se seznamem takovych cest;
+slozka se serverem uvnitr se ve stromu zobrazi i bez zaznamu v tomto
+poli. Pole je `#[serde(default)]`, takze starsi trezory (bez tohoto
+pole v ulozenem JSONu) se nacitaji beze zmeny.
+
+### Tema
+
+Aktualne existuje jen jedno tmave "terminalove" tema (barvy odvozene z
+loga - tmave modro-seda + cyan akcent), viz `termx-gui/src/theme.rs`.
+Zamerne se zatim nemenil puvodni vzhled - az bude potreba, pribude v
+Nastaveni volba pro druhe, modernejsi tema (`theme.rs` je uz pripraveny
+jako samostatny modul prave kvuli tomu).
 
 ## Bezpecnost ulozenych serveru
 
@@ -103,7 +166,7 @@ naprazdno: kurzor je behem psani plny, mezi radky a po dopsani obou
 radku par-krat blikne a okno se pak samo zavre (nebo hned po
 stisku klavesy/kliknuti). Implementace je v `termx-splash` (`minifb`
 pro okno, `fontdue` pro rasterizaci pisma). Teprve po zavreni splash
-okna aplikace prevezme terminal a spusti hlavni TUI.
+okna aplikace prevezme terminal a spusti hlavni GUI.
 
 Pokud se graficke okno nepodari otevrit (napr. beh pres SSH bez
 X11/Wayland, headless server), splash se tise preskoci a aplikace
@@ -132,23 +195,29 @@ preskoci kontrolu aktualizaci.
 
 ## Dulezita poznamka k tomuto commitu
 
-Tato pocatecni kostra byla vytvorena v izolovanem prostredi bez
-pristupu na crates.io, takze **zde nebylo mozne spustit `cargo build`
-/ `cargo check`** a kod tak neprosel automatickym overenim kompilace
-(zejmena crate `russh` v `termx-ssh` a `minifb`/`fontdue` v
-`termx-splash` mely v ruznych verzich mirne odlisne API - viz komentare
-v prislusnych souborech). Az
-spustite `cargo build` poprve u sebe, je mozne, ze bude potreba
-doladit par nazvu metod/typu. Architektura (moduly, trait
-`ProtocolModule`, sifrovani, TUI) tim dotcena neni - jde jen o
-"posledni mili" prizpusobeni konkretni verzi zavislosti.
+Tato pocatecni kostra (a naslednych par commitu vcetne GUI pivotu)
+byla vytvorena v izolovanem prostredi bez pristupu na crates.io, takze
+**zde nebylo mozne spustit `cargo build` / `cargo check`** a kod tak
+neprosel automatickym overenim kompilace (zejmena crate `russh` v
+`termx-ssh`, `minifb`/`fontdue` v `termx-splash` a nyni `egui`/`eframe`
+v `termx-gui` mely/mohou mit v ruznych verzich mirne odlisne API - viz
+komentare v prislusnych souborech). Az spustite `cargo build` poprve u
+sebe, je mozne, ze bude potreba doladit par nazvu metod/typu.
+Architektura (moduly, trait `ProtocolModule`, sifrovani, GUI shell) tim
+dotcena neni - jde jen o "posledni mili" prizpusobeni konkretni verzi
+zavislosti.
 
 ## Roadmap (navrh)
 
+- [ ] Vestaveny emulator terminalu v tabu Spojeni (`alacritty_terminal`),
+      napojeny na `ProtocolModule` misto nahradni obrazovky
 - [ ] Overeni otisku klice serveru (known_hosts) v `termx-ssh`
 - [ ] Prihlaseni SSH privatnim klicem / pres ssh-agent
 - [ ] Modul `termx-serial` (seriova linka, obdoba PuTTY/RealTerm)
 - [ ] Modul `termx-ftp` / `termx-sftp`
-- [ ] Vice zalozek/panelu v TUI (soubezna spojeni)
+- [ ] Razeni serveru ve stromu (tazenim / rucne), presun tazenim mezi slozkami
+- [ ] Export/import trezoru primo z GUI (dialog v Nastaveni - logika v
+      `termx-vault` uz existuje)
+- [ ] Druhe, modernejsi tema (prepinatelne v Nastaveni)
 - [ ] Prenos souboru pretazenim / prikazem v ramci SSH/SFTP relace
 - [ ] Kompletni known_hosts + varovani pri zmene klice serveru

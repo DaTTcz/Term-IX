@@ -5,8 +5,8 @@ members = [
     "crates/termx-vault",
     "crates/termx-update",
     "crates/termx-ssh",
-    "crates/termx-tui",
     "crates/termx-splash",
+    "crates/termx-gui",
 ]
 
 [workspace.package]
@@ -21,8 +21,8 @@ termx-core = { path = "crates/termx-core" }
 termx-vault = { path = "crates/termx-vault" }
 termx-update = { path = "crates/termx-update" }
 termx-ssh = { path = "crates/termx-ssh" }
-termx-tui = { path = "crates/termx-tui" }
 termx-splash = { path = "crates/termx-splash" }
+termx-gui = { path = "crates/termx-gui" }
 
 anyhow = "1"
 thiserror = "2"
@@ -33,6 +33,9 @@ directories = "5"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+egui = "0.29"
+eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "persistence"] }
 
 [package]
 name = "term-ix"
@@ -52,11 +55,10 @@ termx-core = { workspace = true }
 termx-vault = { workspace = true }
 termx-update = { workspace = true }
 termx-ssh = { workspace = true }
-termx-tui = { workspace = true }
 termx-splash = { workspace = true }
+termx-gui = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
-tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 rpassword = "7"

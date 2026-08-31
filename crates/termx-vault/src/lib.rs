@@ -27,6 +27,14 @@ pub type Result<T> = std::result::Result<T, VaultError>;
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VaultData {
     pub servers: Vec<Session>,
+    /// Cesty slozek, ktere existuji i bez jedineho serveru uvnitr (napr.
+    /// prazdna slozka pripravena predem) - stejny format cesty jako
+    /// `Session::group` (segmenty oddelene lomitkem). Slozka obsahujici
+    /// aspon jeden server se ve stromu zobrazi i bez zaznamu zde; toto
+    /// pole je jen pro slozky, ktere by jinak byly neviditelne.
+    /// `#[serde(default)]` kvuli zpetne kompatibilite se starsimi trezory.
+    #[serde(default)]
+    pub folders: Vec<String>,
 }
 
 /// Odemceny trezor. Heslo samotne se v `Vault` neuchovava - pri kazdem

@@ -1,6 +1,6 @@
 //! Term-IX - binarni crate, ktery propojuje vsechny moduly dohromady:
 //! nacte/vytvori sifrovany trezor (termx-vault), zaregistruje dostupne
-//! protokolove moduly (zatim termx-ssh) do TUI (termx-tui) a pred startem
+//! protokolove moduly (zatim termx-ssh) do GUI (termx-gui) a pred startem
 //! zkontroluje aktualizace (termx-update).
 //!
 //! Pridani noveho protokolu do aplikace = novy crate `termx-<protokol>`
@@ -10,8 +10,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use termx_core::AppPaths;
-use termx_tui::ModuleRegistry;
+use termx_core::{AppPaths, ModuleRegistry};
 
 #[derive(Parser)]
 #[command(name = "term-ix", version, about = "Term-IX - modularni terminalovy klient (SSH/Serial/FTP...)")]
@@ -64,13 +63,12 @@ fn main() -> anyhow::Result<()> {
     let mut registry = ModuleRegistry::new();
     registry.register(Arc::new(termx_ssh::SshModule::new()));
 
-    // Async cast aplikace (TUI smycka + sitove operace modulu) bezi ve
-    // vlastnim tokio runtime, ktery zakladame az TADY - self-update a
-    // prace s trezorem vyse jsou zamerne cist synchronni, aby se
-    // predeslo problemum s vnorenymi/blokujicimi volanimi uvnitr
-    // async kontextu.
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(termx_tui::run_app(vault, master_password, registry))
+    // GUI (termx-gui, postavene na egui/eframe) si bezi ve vlastni
+    // blokujici smycce na aktualnim vlakne - na rozdil od puvodniho TUI
+    // uz zde neni potreba tokio runtime zalozeny primo v main(); pripadne
+    // asynchronni sitove operace protokolovych modulu si spousti az GUI
+    // vrstva/moduly samy, az bude vestaveny terminal skutecne pripojeny.
+    termx_gui::run_app(vault, master_password, registry)
 }
 
 fn check_for_updates() {

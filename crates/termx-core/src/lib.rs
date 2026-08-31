@@ -9,11 +9,13 @@
 mod config;
 mod error;
 mod module;
+mod registry;
 mod session;
 
 pub use config::AppPaths;
 pub use error::CoreError;
 pub use module::{ConnectionContext, ProtocolModule};
+pub use registry::ModuleRegistry;
 pub use session::{AuthMethod, Protocol, Session};
 
 pub type Result<T> = std::result::Result<T, CoreError>;

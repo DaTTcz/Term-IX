@@ -12,13 +12,16 @@ pub struct ConnectionContext<'a> {
 }
 
 /// Spolecne rozhrani, ktere musi implementovat kazdy protokolovy modul
-/// (termx-ssh, termx-serial, termx-ftp, ...). Aplikace (termx-tui) pracuje
-/// jen s touto abstrakci a nemusi vedet nic o konkretnim protokolu.
+/// (termx-ssh, termx-serial, termx-ftp, ...). Aplikace (nyni GUI shell
+/// `termx-gui`) pracuje jen s touto abstrakci a nemusi vedet nic o
+/// konkretnim protokolu.
 ///
-/// Modul dostane uz plne pripraveny terminal (stdin/stdout jsou v "raw"
-/// rezimu, alternate screen TUI je docasne opusten) a je zodpovedny za
-/// cely interaktivni prubeh spojeni az do jeho ukonceni uzivatelem
-/// nebo vzdalenou stranou.
+/// POZNAMKA (GUI pivot): rozhrani zatim pochazi z puvodni TUI verze, kdy
+/// modul dostal primo stdin/stdout terminalu v "raw" rezimu. V `termx-gui`
+/// zatim neni napojene (viz `render_connection` v `termx-gui`) - az bude
+/// vestaveny emulator terminalu (`alacritty_terminal`) skutecne pripojen,
+/// bude tato metoda pravdepodobne prepracovana tak, aby misto primeho
+/// pristupu ke stdin/stdout cetla/psala do bufferu emulatoru.
 #[async_trait]
 pub trait ProtocolModule: Send + Sync {
     /// Strojovy identifikator modulu, musi odpovidat [`crate::Protocol::key`].

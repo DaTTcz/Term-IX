@@ -60,7 +60,10 @@ pub struct Session {
     pub host: String,
     pub port: u16,
     pub auth: AuthMethod,
-    /// Volitelne zarazeni do slozky/skupiny v seznamu serveru.
+    /// Cesta ke slozce v strome serveru, napr. `"Prace/PBX"` pro vnorenou
+    /// slozku PBX uvnitr Prace. `None` = korenova uroven (bez slozky).
+    /// Segmenty se oddeluji lomitkem; UI (`termx-gui`) z techto cest
+    /// pri vykreslovani stromu sestavuje vnorenou strukturu.
     pub group: Option<String>,
     pub notes: Option<String>,
 }
