@@ -34,6 +34,13 @@
 //!      resenim je zafixovat pocet sloupcu/radku zpet na pevnou hodnotu
 //!      (puvodni `DEFAULT_COLS`/`DEFAULT_ROWS` zustavaji jako vychozi
 //!      velikost pri vytvoreni spojeni, nez se poprve prepocita).
+//!   7. (nove, info proužek se statistikami) `TerminalSession::render_status_bar`
+//!      pouziva `egui::TopBottomPanel::bottom(id).show_inside(ui, ...)` a
+//!      `egui::Frame::none()` - u verze `egui` 0.29 by to melo sedet,
+//!      ale kdyby `Frame::none()` v pouzite verzi nebyla (u novejsich
+//!      `egui` byla nahrazena konstantou `Frame::NONE`), staci upravit
+//!      jen toto jedno volani; zbytek proužku (skladani `parts` do
+//!      textu) na tom nezavisi.
 //! Architektura kolem (SSH vlakno v `termx-ssh`, kanaly, GUI tab) na
 //! techto detailech nezavisi - jde o lokalizovanou opravu jednoho
 //! souboru.
@@ -50,6 +57,14 @@
 //!   pojmenovanych barev za behu) se nezohlednuje - `Foreground`/
 //!   `Background`/neznama pojmenovana barva pouzije barvy tematu
 //!   aplikace.
+//! - Info proužek pod terminalem (CPU/RAM/sit/disk/uzivatele, viz
+//!   `render_status_bar`) se obcerstvuje kazdych 5 sekund na samostatnem
+//!   docasnem SSH kanalu (`termx_ssh::fetch_stats_output`) - na tuto
+//!   dobu (max. 3s, viz timeout tamtez) se muze interaktivni kanal na
+//!   chvili zpozdit. Zamerne zvoleny jednodussi kompromis oproti
+//!   spousteni na uplne samostatnem tokio tasku se sdilenym stavem.
+//!   Nez po pripojeni dorazi prvni sada statistik, proužek se
+//!   nezobrazuje vubec.
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
@@ -58,7 +73,7 @@ use alacritty_terminal::term::{Config as TermConfig, Term};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
 
 use termx_core::Session;
-use termx_ssh::{spawn_ssh_session, SshEvent, SshHandle, SshInput};
+use termx_ssh::{spawn_ssh_session, SshEvent, SshHandle, SshInput, SystemStats};
 
 use crate::theme;
 
@@ -132,6 +147,16 @@ pub struct TerminalSession {
     /// snimku nezmenila).
     cols: usize,
     rows: usize,
+    /// Jmeno ulozeneho spojeni (viz `Session::name`) - zobrazuje se v
+    /// info proužku pod terminalem (`render_status_bar`), aby bylo na
+    /// prvni pohled jasne, ke kteremu serveru statistiky patri (uzitecne
+    /// zejmena kdyz ma uzivatel otevrenych vic Connection tabu najednou).
+    session_name: String,
+    /// Posledni prijate systemove metriky (viz `termx_ssh::SystemStats`) -
+    /// `None`, dokud po pripojeni jeste nedorazilo prvni periodicke
+    /// obcerstveni (viz `SshEvent::Stats` v `pump`); do te doby se info
+    /// proužek proste nezobrazuje (viz `render_status_bar`).
+    stats: Option<SystemStats>,
 }
 
 impl TerminalSession {
@@ -150,6 +175,8 @@ impl TerminalSession {
             error: None,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
+            session_name: session.name.clone(),
+            stats: None,
         }
     }
 
@@ -213,6 +240,9 @@ impl TerminalSession {
                 Ok(SshEvent::Closed) => {
                     self.connected = false;
                 }
+                Ok(SshEvent::Stats(stats)) => {
+                    self.stats = Some(stats);
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
@@ -269,6 +299,13 @@ impl TerminalSession {
             ui.add_space(6.0);
         }
 
+        // Info proužek se systemovymi metrikami se pripne dolu JESTE
+        // PRED `resize_to_fit`, aby si vzal svuj kousek plochy jako
+        // prvni a prepocet velikosti terminalu uz pocital jen s tim, co
+        // zbyde nad nim (presne jak to vypada na predloze z MobaXtermu -
+        // proužek pod oknem terminalu, ne pres nej).
+        self.render_status_bar(ui);
+
         // Az TED (po pripadnych hlaskach vyse, ktere uz zabraly kus
         // plochy tohoto snimku) - viz `resize_to_fit`.
         self.resize_to_fit(ui);
@@ -277,6 +314,54 @@ impl TerminalSession {
         egui::ScrollArea::both().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
             ui.add(egui::Label::new(job).selectable(false));
         });
+    }
+
+    /// Vykresli MobaXterm-podobny info proužek se systemovymi metrikami
+    /// (`self.stats`) pripnuty ke spodnimu okraji tabu
+    /// (`egui::TopBottomPanel::bottom(...).show_inside`, ne `.show` - ten
+    /// by se vztahoval na cele okno aplikace, ne jen na tento tab).
+    /// Dokud jeste nedorazilo prvni periodicke obcerstveni statistik
+    /// (`self.stats == None`, viz `pump`), proužek se vubec nezobrazuje -
+    /// jednodussi a citelnejsi nez zobrazovat radek plny "-" hodnot.
+    fn render_status_bar(&self, ui: &mut egui::Ui) {
+        let Some(stats) = &self.stats else { return };
+
+        let mut parts: Vec<String> = vec![format!("🔌 {}", self.session_name)];
+
+        if let Some(cpu) = stats.cpu_percent {
+            parts.push(format!("⚙ {}%", fmt_decimal(cpu as f64, 0)));
+        }
+        if let (Some(used), Some(total)) = (stats.mem_used_gb, stats.mem_total_gb) {
+            parts.push(format!("📊 {} / {} GB", fmt_decimal(used, 2), fmt_decimal(total, 2)));
+        }
+        if let Some(up) = stats.net_up_mbps {
+            parts.push(format!("▲ {} Mb/s", fmt_decimal(up, 2)));
+        }
+        if let Some(down) = stats.net_down_mbps {
+            parts.push(format!("▼ {} Mb/s", fmt_decimal(down, 2)));
+        }
+        if let Some(days) = stats.uptime_days {
+            parts.push(format!("🖥 {}", czech_days(days)));
+        }
+        parts.push(if stats.user_sessions > 1 {
+            format!("👤 {} (x{})", stats.username, stats.user_sessions)
+        } else {
+            format!("👤 {}", stats.username)
+        });
+        if let Some(disk) = stats.disk_percent {
+            parts.push(format!("💾 /: {disk}%"));
+        }
+
+        egui::TopBottomPanel::bottom(egui::Id::new(("term_status_bar", &self.session_name)))
+            .frame(
+                egui::Frame::none()
+                    .fill(theme::BG_PANEL)
+                    .inner_margin(egui::Margin::symmetric(8.0, 4.0)),
+            )
+            .show_separator_line(false)
+            .show_inside(ui, |ui| {
+                ui.label(egui::RichText::new(parts.join("   |   ")).small());
+            });
     }
 
     /// Sestavi obsah cele obrazovky terminalu jako jeden `LayoutJob` -
@@ -328,6 +413,25 @@ impl TerminalSession {
 
         job
     }
+}
+
+/// Naformatuje cislo s danym poctem desetinnych mist a ceskou desetinou
+/// carkou (misto anglicke tecky) - pro info proužek pod terminalem (viz
+/// `TerminalSession::render_status_bar`), stejne jako zbytek aplikace
+/// pouziva ceskou lokalizaci.
+fn fmt_decimal(value: f64, decimals: usize) -> String {
+    format!("{:.*}", decimals, value).replace('.', ",")
+}
+
+/// Cesky sklonovany pocet dni pro dobu behu serveru (1 den, 2-4 dny, 0
+/// nebo 5 a vice dní) - pro info proužek pod terminalem.
+fn czech_days(days: u64) -> String {
+    let word = match days {
+        1 => "den",
+        2..=4 => "dny",
+        _ => "dní",
+    };
+    format!("{days} {word}")
 }
 
 fn text_format(font_id: &egui::FontId, fg: egui::Color32, bg: egui::Color32) -> egui::TextFormat {

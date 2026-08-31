@@ -31,7 +31,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use handler::TofuHandler;
 
-pub use session::{spawn_ssh_session, SshEvent, SshHandle, SshInput};
+pub use session::{spawn_ssh_session, SshEvent, SshHandle, SshInput, SystemStats};
 
 #[derive(Default)]
 pub struct SshModule;
