@@ -327,6 +327,7 @@ impl TermxApp {
         let Some(mut form) = self.new_session_form.take() else { return };
         let mut open = true;
         let mut submit = false;
+        let mut cancel = false;
 
         egui::Window::new("Nový server")
             .collapsible(false)
@@ -365,10 +366,14 @@ impl TermxApp {
                         submit = true;
                     }
                     if ui.button("Zrušit").clicked() {
-                        open = false;
+                        cancel = true;
                     }
                 });
             });
+
+        if cancel {
+            open = false;
+        }
 
         if submit {
             let port: u16 = form.port.trim().parse().unwrap_or(22);
@@ -398,6 +403,7 @@ impl TermxApp {
         let Some(mut value) = self.new_folder_dialog.take() else { return };
         let mut open = true;
         let mut confirmed = false;
+        let mut cancel = false;
 
         egui::Window::new("Nová složka")
             .collapsible(false)
@@ -411,10 +417,14 @@ impl TermxApp {
                         confirmed = true;
                     }
                     if ui.button("Zrušit").clicked() {
-                        open = false;
+                        cancel = true;
                     }
                 });
             });
+
+        if cancel {
+            open = false;
+        }
 
         if confirmed {
             let trimmed = value.trim().to_string();
@@ -431,6 +441,7 @@ impl TermxApp {
         let Some(mut dialog) = self.rename_dialog.take() else { return };
         let mut open = true;
         let mut confirmed = false;
+        let mut cancel = false;
 
         egui::Window::new("Přejmenovat")
             .collapsible(false)
@@ -443,10 +454,14 @@ impl TermxApp {
                         confirmed = true;
                     }
                     if ui.button("Zrušit").clicked() {
-                        open = false;
+                        cancel = true;
                     }
                 });
             });
+
+        if cancel {
+            open = false;
+        }
 
         if confirmed {
             let new_value = dialog.value.trim().to_string();
@@ -472,6 +487,7 @@ impl TermxApp {
         let Some(mut dialog) = self.move_dialog.take() else { return };
         let mut open = true;
         let mut confirmed = false;
+        let mut cancel = false;
 
         egui::Window::new("Přesunout do složky")
             .collapsible(false)
@@ -485,10 +501,14 @@ impl TermxApp {
                         confirmed = true;
                     }
                     if ui.button("Zrušit").clicked() {
-                        open = false;
+                        cancel = true;
                     }
                 });
             });
+
+        if cancel {
+            open = false;
+        }
 
         if confirmed {
             if let Some(session) = self.vault.data.servers.iter_mut().find(|s| s.id == dialog.session_id) {
@@ -505,6 +525,7 @@ impl TermxApp {
         let Some(target) = self.delete_confirm.take() else { return };
         let mut open = true;
         let mut confirmed = false;
+        let mut cancel = false;
 
         let message = match &target {
             DeleteTarget::Session(id) => {
@@ -528,10 +549,14 @@ impl TermxApp {
                     confirmed = true;
                 }
                 if ui.button("Zrušit").clicked() {
-                    open = false;
+                    cancel = true;
                 }
             });
         });
+
+        if cancel {
+            open = false;
+        }
 
         if confirmed {
             match &target {
