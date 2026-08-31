@@ -29,6 +29,14 @@
 //! presna signatura (napr. ocekavany typ `command`) v pouzite verzi
 //! `russh` nesedi, jde o izolovanou opravu jen teto jedne funkce; zbytek
 //! (parsovani v `parse_stats`) na tom nezavisi.
+//!
+//! POZNAMKA K OVERENI (odlozene zadani prihlasovacich udaju,
+//! `SshEvent::AwaitingCredentials`/`SshInput::Credentials` v
+//! `run_session`): zadne nove `russh` API tu nepribyva - `russh::client::connect`
+//! a nasledne `handle.authenticate_password` uz byly pouzite (a tedy
+//! stejne "neoverene") i predtim, jen se mezi ne vlozilo cekani na
+//! `input_rx.recv()` (uz drive pouzivane v hlavni smycce nize). Jde tedy
+//! o cistě lokalizovanou zmenu poradi volani, ne o nove riziko.
 use std::sync::Arc;
 
 use termx_core::{AuthMethod, Session};
@@ -44,6 +52,15 @@ pub enum SshEvent {
     /// Spojeni bylo uspesne navazano a autentizovano - az od teto
     /// chvile ma smysl zacit odesilat vstup.
     Connected,
+    /// SSH transport (TCP + vymena klicu) uz je uspesne navazan, ale
+    /// `Session::auth` nemela vyplneneho uzivatele - misto okamziteho
+    /// selhani `run_session` ceka primo tady na dodatecne udaje
+    /// (viz [`SshInput::Credentials`]). GUI na tuto udalost reaguje
+    /// zobrazenim prihlasovaciho formulare primo v tabu terminalu (viz
+    /// `termx-gui`, `TerminalSession::render_credentials_prompt`) -
+    /// stejne jako kdyz obycejny `ssh` klient nejdriv nekonfliktne
+    /// naváže spojení a teprve pak se lokálně zeptá na heslo.
+    AwaitingCredentials,
     /// Spojeni skoncilo chybou (sitova chyba, spatne heslo, ...).
     Error(String),
     /// Spojeni bylo cistě ukonceno (server zavrel kanal, apod.) bez chyby.
@@ -92,6 +109,10 @@ pub enum SshInput {
     /// se na PTY serveru (`window_change`), aby napr. `vim`/`htop`
     /// vedely, jak velkou obrazovku maji k dispozici.
     Resize { cols: u32, rows: u32 },
+    /// Dodatecne doplnene prihlasovaci udaje po prijeti
+    /// [`SshEvent::AwaitingCredentials`] - `run_session` na tuto
+    /// zpravu ceka, nez poprve zavola `authenticate_password`.
+    Credentials { username: String, password: String },
 }
 
 /// Uchyt na bezici SSH spojeni - vstupni odesilac a vystupni prijemce.
@@ -326,15 +347,27 @@ async fn run_session(
     input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<SshInput>,
     output_tx: &std::sync::mpsc::Sender<SshEvent>,
 ) -> anyhow::Result<()> {
-    let (username, password) = match &session.auth {
-        AuthMethod::Password { username, password } => (username.clone(), password.clone()),
+    // Uzivatel/heslo se ted zjistuji AZ PO uspesnem navazani transportu
+    // (viz `russh::client::connect` nize), ne pred nim - kdyz
+    // `Session::auth` nema vyplneneho uzivatele, misto okamziteho
+    // selhani se pocka primo tady na dodatecne udaje z GUI
+    // (`SshEvent::AwaitingCredentials`/`SshInput::Credentials`). Diky
+    // tomu uzivatel uvidi, ze spojeni se serverem uz zacalo (transport
+    // je navazan), presne jako u obycejneho `ssh` klienta, ktery se
+    // taky nejdriv pripoji a teprve pak se (lokalne) zepta na heslo.
+    let early_auth = match &session.auth {
+        AuthMethod::Password { username, password } if !username.trim().is_empty() => {
+            Some((username.clone(), password.clone()))
+        }
         AuthMethod::PrivateKey { .. } => {
             anyhow::bail!("přihlášení privátním klíčem zatím není v SSH modulu implementováno")
         }
         AuthMethod::Agent { .. } => {
             anyhow::bail!("přihlášení přes ssh-agent zatím není v SSH modulu implementováno")
         }
-        AuthMethod::None => anyhow::bail!("SSH vyžaduje přihlašovací údaje"),
+        // Prazdny uzivatel (AuthMethod::Password s prazdnym `username`,
+        // nebo AuthMethod::None) - dorese se az po pripojeni, viz nize.
+        AuthMethod::Password { .. } | AuthMethod::None => None,
     };
 
     let config = Arc::new(russh::client::Config::default());
@@ -343,6 +376,27 @@ async fn run_session(
     let mut handle = russh::client::connect(config, addr, TofuHandler)
         .await
         .map_err(|e| anyhow::anyhow!("SSH připojení selhalo: {e}"))?;
+
+    let (username, password) = match early_auth {
+        Some(creds) => creds,
+        None => {
+            let _ = output_tx.send(SshEvent::AwaitingCredentials);
+            loop {
+                match input_rx.recv().await {
+                    Some(SshInput::Credentials { username, password }) => break (username, password),
+                    // Zadny jiny vstup pred prihlasenim nedava smysl
+                    // (GUI zadny neposila, dokud je stav
+                    // `AwaitingCredentials`) - pro jistotu se jen
+                    // ignoruje, misto aby kvuli neocekavane zprave
+                    // spojeni rovnou spadlo.
+                    Some(_) => continue,
+                    // GUI zahodilo `input_tx` (zavreny tab) drive, nez
+                    // uzivatel neco zadal - cistě konec, nejde o chybu.
+                    None => return Ok(()),
+                }
+            }
+        }
+    };
 
     let authenticated = handle
         .authenticate_password(&username, &password)

@@ -129,6 +129,45 @@ impl Default for NewSessionForm {
     }
 }
 
+/// Formular pro editaci JIZ ULOZENEHO serveru (viz `show_edit_session_dialog`,
+/// otevirany polozkou "Upravit..." v kontextovem menu stromu -
+/// `render_session_row`) - stejna pole jako [`NewSessionForm`], jen
+/// navic `id` puvodni session (aby `submit` vedel, kterou polozku v
+/// `vault.data.servers` prepsat) a predvyplnena aktualnimi hodnotami
+/// (viz `EditSessionForm::from_session`).
+struct EditSessionForm {
+    id: Uuid,
+    name: String,
+    folder: String,
+    host: String,
+    port: String,
+    username: String,
+    password: String,
+}
+
+impl EditSessionForm {
+    fn from_session(session: &Session) -> Self {
+        // Aplikace zatim umi zakladat/editovat jen `AuthMethod::Password`
+        // (viz `NewSessionForm`/`QuickConnectForm`/`HomeConnectForm`) -
+        // u ostatnich variant (PrivateKey/Agent/None, zatim nikde v UI
+        // nezalozitelnych) se pole proste predvyplni prazdna, at editaci
+        // formulare nic neblokuje.
+        let (username, password) = match &session.auth {
+            AuthMethod::Password { username, password } => (username.clone(), password.clone()),
+            _ => (String::new(), String::new()),
+        };
+        Self {
+            id: session.id,
+            name: session.name.clone(),
+            folder: session.group.clone().unwrap_or_default(),
+            host: session.host.clone(),
+            port: session.port.to_string(),
+            username,
+            password,
+        }
+    }
+}
+
 /// Formular pro "rychle spojeni" - stejne udaje jako [`NewSessionForm`]
 /// (krome slozky, ktera zde nedava smysl), ale vysledek se NEUKLADA do
 /// trezoru - jen do docasneho `MainApp::ad_hoc_sessions` na dobu behu
@@ -293,6 +332,7 @@ struct ImportDialog {
 
 enum TreeAction {
     Open(Uuid),
+    EditSession(Uuid),
     RenameSession(Uuid),
     MoveSession(Uuid),
     DeleteSession(Uuid),
@@ -555,6 +595,8 @@ struct MainApp {
     terminal_sessions: std::collections::HashMap<Uuid, terminal::TerminalSession>,
 
     new_session_form: Option<NewSessionForm>,
+    /// Editace jiz ulozeneho serveru - viz [`EditSessionForm`].
+    edit_session_form: Option<EditSessionForm>,
     new_folder_dialog: Option<String>,
     rename_dialog: Option<RenameDialog>,
     move_dialog: Option<MoveDialog>,
@@ -608,6 +650,7 @@ impl MainApp {
             active_tab: 0,
             terminal_sessions: std::collections::HashMap::new(),
             new_session_form: None,
+            edit_session_form: None,
             new_folder_dialog: None,
             rename_dialog: None,
             move_dialog: None,
@@ -647,6 +690,7 @@ impl MainApp {
             active_tab: 0,
             terminal_sessions: std::collections::HashMap::new(),
             new_session_form: None,
+            edit_session_form: None,
             new_folder_dialog: None,
             rename_dialog: None,
             move_dialog: None,
@@ -684,6 +728,7 @@ impl MainApp {
     /// najednou).
     fn close_all_dialogs(&mut self) {
         self.new_session_form = None;
+        self.edit_session_form = None;
         self.new_folder_dialog = None;
         self.rename_dialog = None;
         self.move_dialog = None;
@@ -1340,6 +1385,91 @@ impl MainApp {
             self.save_vault();
         } else if open {
             self.new_session_form = Some(form);
+        }
+    }
+
+    /// Editace jiz ulozeneho serveru - otevirano polozkou "Upravit..."
+    /// v kontextovem menu stromu (`render_session_row`/`TreeAction::EditSession`).
+    /// Stejny formular jako `show_new_session_dialog`, jen predvyplneny
+    /// (viz `EditSessionForm::from_session`) a pri odeslani PREPISUJE
+    /// existujici polozku v `vault.data.servers` (podle `form.id`) misto
+    /// pridani nove.
+    fn show_edit_session_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut form) = self.edit_session_form.take() else { return };
+        let mut open = true;
+        let mut submit = false;
+        let mut cancel = false;
+
+        centered_dialog(egui::Window::new("Upravit server"), ctx)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                egui::Grid::new("edit_session_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                    ui.label("Název:");
+                    ui.text_edit_singleline(&mut form.name);
+                    ui.end_row();
+
+                    ui.label("Složka:");
+                    ui.text_edit_singleline(&mut form.folder);
+                    ui.end_row();
+
+                    ui.label("Host:");
+                    ui.text_edit_singleline(&mut form.host);
+                    ui.end_row();
+
+                    ui.label("Port:");
+                    ui.text_edit_singleline(&mut form.port);
+                    ui.end_row();
+
+                    ui.label("Uživatel:");
+                    ui.text_edit_singleline(&mut form.username);
+                    ui.end_row();
+
+                    ui.label("Heslo:");
+                    ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
+                    ui.end_row();
+                });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Uložit").clicked() {
+                        submit = true;
+                    }
+                    if ui.button("Zrušit").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if cancel {
+            open = false;
+        }
+
+        if submit {
+            // Server mezitim mohl byt smazan (napr. z jineho otevreneho
+            // dialogu) - v tom pripade proste neni co ulozit. `found`
+            // drzi vysledek jen do konce pujcky `session` (`iter_mut`),
+            // aby `self.save_vault()` pod tim slo zavolat bez konfliktu
+            // pujcek (`session` by jinak drzela mutable pujcku `self.vault`
+            // po celou dobu tohoto bloku).
+            let found = if let Some(session) = self.vault.data.servers.iter_mut().find(|s| s.id == form.id) {
+                let port: u16 = form.port.trim().parse().unwrap_or(22);
+                session.name = if form.name.trim().is_empty() { form.host.clone() } else { form.name.clone() };
+                session.host = form.host.clone();
+                session.port = port;
+                session.auth = AuthMethod::Password { username: form.username.clone(), password: form.password.clone() };
+                let folder = form.folder.trim();
+                session.group = if folder.is_empty() { None } else { Some(folder.to_string()) };
+                true
+            } else {
+                false
+            };
+            if found {
+                self.save_vault();
+            }
+        } else if open {
+            self.edit_session_form = Some(form);
         }
     }
 
@@ -2178,6 +2308,10 @@ impl MainApp {
                 actions.push(TreeAction::Open(id));
                 ui.close_menu();
             }
+            if ui.button("Upravit...").clicked() {
+                actions.push(TreeAction::EditSession(id));
+                ui.close_menu();
+            }
             if ui.button("Přejmenovat...").clicked() {
                 actions.push(TreeAction::RenameSession(id));
                 ui.close_menu();
@@ -2196,6 +2330,13 @@ impl MainApp {
     fn apply_tree_action(&mut self, action: TreeAction) {
         match action {
             TreeAction::Open(id) => self.open_session_tab(id),
+            TreeAction::EditSession(id) => {
+                if let Some(session) = self.vault.data.servers.iter().find(|s| s.id == id) {
+                    let form = EditSessionForm::from_session(session);
+                    self.close_all_dialogs();
+                    self.edit_session_form = Some(form);
+                }
+            }
             TreeAction::RenameSession(id) => {
                 if let Some(session) = self.vault.data.servers.iter().find(|s| s.id == id) {
                     let value = session.name.clone();
@@ -2270,6 +2411,7 @@ impl MainApp {
         self.top_menu(ctx);
 
         self.show_new_session_dialog(ctx);
+        self.show_edit_session_dialog(ctx);
         self.show_new_folder_dialog(ctx);
         self.show_rename_dialog(ctx);
         self.show_move_dialog(ctx);
