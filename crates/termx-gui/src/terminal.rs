@@ -28,14 +28,22 @@
 //!      barev + Indexed/Spec, vse ostatni ma bezpecny fallback (`_ =>`),
 //!      takze i kdyby se nejaka varianta jmenovala jinak/pribyla nova,
 //!      staci upravit jen `named_color`.
+//!   6. (nove, dynamicke prizpusobovani velikosti) `Fonts::glyph_width`/
+//!      `Fonts::row_height` pouzite v `TerminalSession::resize_to_fit` -
+//!      pokud presne tyto nazvy metod v pouzite verzi `egui` neexistuji,
+//!      resenim je zafixovat pocet sloupcu/radku zpet na pevnou hodnotu
+//!      (puvodni `DEFAULT_COLS`/`DEFAULT_ROWS` zustavaji jako vychozi
+//!      velikost pri vytvoreni spojeni, nez se poprve prepocita).
 //! Architektura kolem (SSH vlakno v `termx-ssh`, kanaly, GUI tab) na
 //! techto detailech nezavisi - jde o lokalizovanou opravu jednoho
 //! souboru.
 //!
 //! ZNAME OMEZENI TETO PRVNI VERZE (vedomy kompromis kvuli rozsahu):
-//! - Velikost terminalu je pevna (`DEFAULT_COLS`/`DEFAULT_ROWS`), needni
-//!   se dynamicky podle velikosti okna/tabu - kdyz se nevejde, tab je
-//!   scrollovatelny (`egui::ScrollArea`).
+//! - Velikost terminalu se prizpusobuje velikosti Connection tabu
+//!   (viz `TerminalSession::resize`, volane kazdy snimek z `render`) -
+//!   pocet sloupcu/radku se pocita z dostupne plochy a rozmeru
+//!   monospace pisma. `egui::ScrollArea` zustava jako pojistka pro
+//!   pripad nepresnosti tohoto vypoctu.
 //! - Tucne/kurziva/podtrzeni (`cell.flags`) se zatim nevykresluji, jen
 //!   barvy popredi/pozadi.
 //! - Zmena barevne palety pres OSC escape sekvence (redefinice
@@ -54,10 +62,26 @@ use termx_ssh::{spawn_ssh_session, SshEvent, SshHandle, SshInput};
 
 use crate::theme;
 
-/// Vychozi (zatim pevna) velikost terminalu ve znacich - viz "ZNAME
-/// OMEZENI" vyse.
+/// Vychozi velikost terminalu ve znacich, nez se pri prvnim vykresleni
+/// prepocita podle skutecne dostupne plochy tabu (viz
+/// `TerminalSession::resize_to_fit`).
 const DEFAULT_COLS: usize = 100;
 const DEFAULT_ROWS: usize = 32;
+
+/// Meze pro dynamicky prepocitavanou velikost - nikdy neuz nez by bylo
+/// prakticky pouzitelne (napr. behem zmensovani/otevirani okna, kdy
+/// tab jeste na chvili muze mit skoro nulovou velikost), a nikdy vic,
+/// nez je rozumne pro vykon vykreslovani/PTY na druhe strane.
+const MIN_COLS: usize = 20;
+const MIN_ROWS: usize = 5;
+const MAX_COLS: usize = 400;
+const MAX_ROWS: usize = 150;
+
+const FONT_SIZE: f32 = 14.0;
+
+fn terminal_font() -> egui::FontId {
+    egui::FontId::monospace(FONT_SIZE)
+}
 
 /// Vlastni rozmery mrizky pro `Term::new` - `alacritty_terminal` sam o
 /// sobe nezna zadnou konkretni velikost, ocekava typ implementujici
@@ -100,6 +124,14 @@ pub struct TerminalSession {
     handle: SshHandle,
     connected: bool,
     error: Option<String>,
+    /// Aktualni velikost mrizky ve znacich - drzena zvlast (mimo
+    /// `self.term`), aby `resize_to_fit` mohla levne kazdy snimek
+    /// zjistit, jestli se vubec neco zmenilo, bez nutnosti se pokazde
+    /// ptat `self.term` (a hlavne bez zbytecneho odesilani
+    /// `SshInput::Resize` na server, kdyz se velikost od minuleho
+    /// snimku nezmenila).
+    cols: usize,
+    rows: usize,
 }
 
 impl TerminalSession {
@@ -116,7 +148,47 @@ impl TerminalSession {
             handle,
             connected: false,
             error: None,
+            cols: DEFAULT_COLS,
+            rows: DEFAULT_ROWS,
         }
+    }
+
+    /// Zmeni velikost mrizky terminalu (pocet sloupcu/radku) a da vedet
+    /// i druhe strane spojeni (`SshInput::Resize` - `window_change` na
+    /// SSH kanalu), aby napr. `vim`/`htop` vedely, jak velkou obrazovku
+    /// maji k dispozici. No-op, kdyz se velikost od minule nezmenila.
+    fn resize(&mut self, cols: usize, rows: usize) {
+        if cols == self.cols && rows == self.rows {
+            return;
+        }
+        self.cols = cols;
+        self.rows = rows;
+        self.term.resize(TermSize { cols, rows });
+        let _ = self.handle.input_tx.send(SshInput::Resize { cols: cols as u32, rows: rows as u32 });
+    }
+
+    /// Spocita, kolik sloupcu/radku monospace pisma se vejde do dane
+    /// dostupne plochy, a podle toho (pripadne) zmeni velikost terminalu
+    /// - viz `resize`. Volano kazdy snimek z `render`, tesne pred tim,
+    /// nez se vlastni obsah terminalu vykresli, aby prepocet pouzival
+    /// aktualni dostupnou plochu tohoto snimku (uz po pripadnych
+    /// hlaskach o stavu spojeni nad terminalem, ktere taky zabiraji
+    /// misto).
+    fn resize_to_fit(&mut self, ui: &egui::Ui) {
+        let available = ui.available_size();
+        let font_id = terminal_font();
+        let (char_w, row_h) = ui.fonts(|f| (f.glyph_width(&font_id, 'M'), f.row_height(&font_id)));
+
+        if char_w <= 0.0 || row_h <= 0.0 {
+            // Pismo se jeste nepodarilo zmerit (napr. uplne prvni
+            // snimek) - radeji nic nemenit, nez pocitat s nesmyslnymi
+            // rozmery.
+            return;
+        }
+
+        let cols = ((available.x / char_w).floor() as usize).clamp(MIN_COLS, MAX_COLS);
+        let rows = ((available.y / row_h).floor() as usize).clamp(MIN_ROWS, MAX_ROWS);
+        self.resize(cols, rows);
     }
 
     /// Vycerpa vsechny cekajici udalosti ze SSH vlakna (nikdy neceka) a
@@ -197,6 +269,10 @@ impl TerminalSession {
             ui.add_space(6.0);
         }
 
+        // Az TED (po pripadnych hlaskach vyse, ktere uz zabraly kus
+        // plochy tohoto snimku) - viz `resize_to_fit`.
+        self.resize_to_fit(ui);
+
         let job = self.build_layout_job();
         egui::ScrollArea::both().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
             ui.add(egui::Label::new(job).selectable(false));
@@ -209,7 +285,7 @@ impl TerminalSession {
     /// znak, coz by bylo zbytecne pomale).
     fn build_layout_job(&self) -> egui::text::LayoutJob {
         let mut job = egui::text::LayoutJob::default();
-        let font_id = egui::FontId::monospace(14.0);
+        let font_id = terminal_font();
         let grid = self.term.grid();
         let cursor_point = grid.cursor.point;
 
