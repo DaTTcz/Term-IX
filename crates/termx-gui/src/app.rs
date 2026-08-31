@@ -1418,6 +1418,14 @@ impl MainApp {
                 });
             if self.settings.theme != prev_theme {
                 theme::apply(ui.ctx(), self.settings.theme);
+                // Zmena se deje az uvnitr JIZ bezicich panelu tohoto
+                // snimku (`SidePanel`/horni lista uz maji sve pozadi
+                // vykresleno se STARYM tematem) - `set_visuals` samo o
+                // sobe dalsi snimek nevynuti, proto ho o nej pozadame
+                // rovnou, at se zbytek UI dobarvi novym tematem co
+                // nejdriv (prakticky hned), ne az pri nejake nasledujici
+                // uzivatelove interakci.
+                ui.ctx().request_repaint();
             }
         });
         ui.add_space(4.0);
@@ -2675,8 +2683,21 @@ impl MainApp {
         // sve odsazeni pridavaji zvlast (viz nize), ale obsah SSH
         // terminalu (`render_connection`) uz ne, aby oknem terminalu
         // slo dotahnout az ke kraji plochy (viz `active_tab_content`).
+        //
+        // Pozadi ZAMERNE NENI napevno `theme::BG_PANEL` (drivejsi chyba,
+        // kdyz jeste bylo jen jedno tema - viz zpetna vazba "světlé
+        // téma je nečitelné": tenhle CentralPanel je hlavni plocha, ve
+        // ktere se vykresluje i cely Settings tab, takze napevno tmave
+        // pozadi zpusobilo tmavy text z `Theme::Modern` na porad
+        // tmavem pozadi) - misto toho se bere AKTUALNI `panel_fill`
+        // z prave aktivniho tematu (`theme::apply` ho nastavuje pres
+        // `ctx.set_visuals`), takze CentralPanel spravne sleduje
+        // vybrane tema stejne jako ostatni panely (`SidePanel`/
+        // `TopBottomPanel`), ktere zadny vlastni `.fill(...)` nemely a
+        // fungovaly spravne uz predtim.
+        let panel_fill = ctx.style().visuals.panel_fill;
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(theme::BG_PANEL).inner_margin(egui::Margin::same(0.0)))
+            .frame(egui::Frame::none().fill(panel_fill).inner_margin(egui::Margin::same(0.0)))
             .show(ctx, |ui| {
                 egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 6.0)).show(ui, |ui| {
                     self.tab_bar(ui);
