@@ -163,6 +163,27 @@ fn blend_pixel(buffer: &mut [u32], img_w: usize, x: usize, y: usize, color_rgb: 
     buffer[idx] = (nr << 16) | (ng << 8) | nb;
 }
 
+/// Rozmery hlavni obrazovky (primarniho monitoru) ve fyzickych pixelech,
+/// pro rucni vycentrovani splash okna - viz `try_show_splash`. Stejny
+/// zpusob (primy Win32 FFI dotaz) jako `set_process_dpi_aware` v
+/// `main.rs`, aby se kvuli jedne funkci nemusela pridavat dalsi
+/// nazavislost (`winapi`/`windows` crate).
+#[cfg(target_os = "windows")]
+fn primary_screen_size() -> Option<(i32, i32)> {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetSystemMetrics(n_index: i32) -> i32;
+    }
+    const SM_CXSCREEN: i32 = 0;
+    const SM_CYSCREEN: i32 = 1;
+    let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    if w > 0 && h > 0 {
+        Some((w, h))
+    } else {
+        None
+    }
+}
+
 fn try_show_splash(info: &SplashInfo) -> anyhow::Result<()> {
     let img = image::load_from_memory(LOGO_BYTES)?.to_rgba8();
 
@@ -216,11 +237,29 @@ fn try_show_splash(info: &SplashInfo) -> anyhow::Result<()> {
         height,
         WindowOptions {
             borderless: true,
+            // `borderless` samo o sobe u minifb na Windows nestaci - bez
+            // `title: false` se muze porad zobrazit titulkovy pruh
+            // (caption bar), coz je presne ta chyba, kterou uzivatel
+            // hlasil. Obe nastaveni dohromady = zadne okenni orameni.
+            title: false,
             resize: false,
             topmost: true,
             ..WindowOptions::default()
         },
     )?;
+
+    // Vycentrovat okno na obrazovce - minifb samo o sobe zadnou
+    // "centered" volbu nema, takze na Windows pozici dopocitame rucne
+    // (stejny pristup jako DPI-awareness v main.rs: primy Win32 FFI
+    // volani, zadna dalsi zavislost). Na jinych platformach necha
+    // aplikace umisteni na okennim manageru - neni to regrese, drive
+    // se poloha neresila vubec.
+    #[cfg(target_os = "windows")]
+    if let Some((screen_w, screen_h)) = primary_screen_size() {
+        let x = ((screen_w - width as i32) / 2).max(0);
+        let y = ((screen_h - height as i32) / 2).max(0);
+        window.set_position(x as isize, y as isize);
+    }
 
     let start = Instant::now();
 

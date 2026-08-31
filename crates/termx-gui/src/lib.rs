@@ -43,6 +43,14 @@ pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry) -> anyhow::Result<
             .with_inner_size([1150.0, 720.0])
             .with_min_inner_size([760.0, 440.0])
             .with_icon(load_icon()),
+        // Pri prvnim spusteni (kdyz jeste neni co obnovit) se okno
+        // vycentruje na obrazovce. `persist_window` pak pri kazdem
+        // dalsim spusteni (diky cargo feature "persistence" u eframe)
+        // obnovi presne tu polohu a velikost, ve ktere uzivatel okno
+        // naposledy zavrel - vlastni ukladaci/nacitaci logika k tomu
+        // netreba, o to se stara primo eframe.
+        centered: true,
+        persist_window: true,
         ..Default::default()
     };
 

@@ -55,6 +55,26 @@ impl Vault {
         Ok(vault)
     }
 
+    /// Docasny trezor jen v pameti, ktery se NIKDY nezapisuje na disk -
+    /// pouziva se pro "hostovsky" rezim GUI (uzivatel pri startu
+    /// nezadal hlavni heslo, viz `termx-gui`). `path()` u nej vraci
+    /// prazdnou cestu a [`Vault::save`] je zamerne no-op (viz tam) -
+    /// volajici (GUI) navic v tomto rezimu vubec nema nabizet UI, ktere
+    /// by se `save` pokouselo volat, aby uzivatel nemel dojem, ze se
+    /// neco uklada.
+    pub fn in_memory() -> Self {
+        Vault {
+            path: std::path::PathBuf::new(),
+            data: VaultData::default(),
+        }
+    }
+
+    /// `true` pro trezor vytvoreny pres [`Vault::in_memory`] (hostovsky
+    /// rezim) - nema zadny soubor na disku.
+    pub fn is_in_memory(&self) -> bool {
+        self.path.as_os_str().is_empty()
+    }
+
     /// Otevre existujici trezor a pokusi se jej odemknout hlavnim heslem.
     /// Spatne heslo -> [`VaultError::InvalidPasswordOrCorrupt`] (autentizovane
     /// sifrovani nerozlisuje mezi spatnym heslem a poskozenym souborem -
@@ -68,7 +88,14 @@ impl Vault {
     }
 
     /// Znovu zasifruje aktualni obsah a ulozi na puvodni cestu.
+    ///
+    /// Bezpecnostni pojistka navic: u trezoru z [`Vault::in_memory`]
+    /// (zadna cesta) je to zamerne no-op, aby ho ani chyba v GUI vrstve
+    /// nemohla omylem zkusit zapsat na nejakou nesmyslnou cestu.
     pub fn save(&self, master_password: &str) -> Result<()> {
+        if self.is_in_memory() {
+            return Ok(());
+        }
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }

@@ -55,6 +55,32 @@ impl Default for NewSessionForm {
     }
 }
 
+/// Formular pro "rychle spojeni" - stejne udaje jako [`NewSessionForm`]
+/// (krome slozky, ktera zde nedava smysl), ale vysledek se NEUKLADA do
+/// trezoru - jen do docasneho `MainApp::ad_hoc_sessions` na dobu behu
+/// aplikace. Pouziva se hlavne v hostovskem rezimu (bez zadaneho
+/// hlavniho hesla), ale dostupne je odkudkoliv pro jednorazova spojeni,
+/// ktera si uzivatel nechce ukladat.
+struct QuickConnectForm {
+    name: String,
+    host: String,
+    port: String,
+    username: String,
+    password: String,
+}
+
+impl Default for QuickConnectForm {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            host: String::new(),
+            port: "22".to_string(),
+            username: String::new(),
+            password: String::new(),
+        }
+    }
+}
+
 enum RenameTarget {
     Session(Uuid),
     Folder(String),
@@ -131,13 +157,26 @@ fn build_tree(data: &VaultData) -> FolderNode {
     root
 }
 
-/// Cela aplikace PO uspesnem odemceni/vytvoreni trezoru - totozne s tim,
-/// jak vypadal puvodni `TermxApp` pred pridanim zamcene obrazovky.
+/// Cela aplikace PO uspesnem odemceni/vytvoreni trezoru (nebo po
+/// vstupu do hostovskeho rezimu, viz `is_guest`) - totozne s tim, jak
+/// vypadal puvodni `TermxApp` pred pridanim zamcene obrazovky.
 struct MainApp {
     vault: Vault,
     master_password: String,
     #[allow(dead_code)] // navazujici krok: napojeni Connection tabu na skutecny modul
     registry: ModuleRegistry,
+
+    /// `true`, kdyz uzivatel na uvodni obrazovce zvolil "Pokračovat bez
+    /// hesla" - `vault` je pak jen prazdny [`Vault::in_memory`] (nikdy
+    /// se nezapisuje na disk) a UI pro spravu ulozenych serveru
+    /// (pridavani/mazani/presouvani, zmena hesla, export) se schova -
+    /// viz kontroly `if !self.is_guest` u prislusnych tlacitek/polozek
+    /// menu. Otevrit jde jen "rychle spojeni" (`ad_hoc_sessions`).
+    is_guest: bool,
+    /// Docasna spojeni zalozena pres "Nové rychlé spojení..." - nikdy
+    /// se neuklada do `vault`, zije jen po dobu behu aplikace. Dostupne
+    /// v obou rezimech, ale hlavni ucel je hostovsky rezim.
+    ad_hoc_sessions: Vec<Session>,
 
     tabs: Vec<TabKind>,
     active_tab: usize,
@@ -148,6 +187,7 @@ struct MainApp {
     move_dialog: Option<MoveDialog>,
     delete_confirm: Option<DeleteTarget>,
     change_password_dialog: Option<ChangePasswordDialog>,
+    quick_connect_form: Option<QuickConnectForm>,
 
     status_message: Option<String>,
 }
@@ -158,6 +198,8 @@ impl MainApp {
             vault,
             master_password,
             registry,
+            is_guest: false,
+            ad_hoc_sessions: Vec::new(),
             tabs: vec![TabKind::Home],
             active_tab: 0,
             new_session_form: None,
@@ -166,6 +208,33 @@ impl MainApp {
             move_dialog: None,
             delete_confirm: None,
             change_password_dialog: None,
+            quick_connect_form: None,
+            status_message: None,
+        }
+    }
+
+    /// "Hostovsky" rezim - uzivatel na uvodni obrazovce nezadal hlavni
+    /// heslo. Zadny trezor se necte ani nezapisuje (`Vault::in_memory`),
+    /// takze strom je prazdny a pridavani/mazani serveru je v UI
+    /// schovane; jedina dostupna cesta k pripojeni je "rychle spojeni"
+    /// (`quick_connect_form`/`ad_hoc_sessions`), ktere si uzivatel musi
+    /// zadat pri kazdem spusteni znovu.
+    fn new_guest(registry: ModuleRegistry) -> Self {
+        Self {
+            vault: Vault::in_memory(),
+            master_password: String::new(),
+            registry,
+            is_guest: true,
+            ad_hoc_sessions: Vec::new(),
+            tabs: vec![TabKind::Home],
+            active_tab: 0,
+            new_session_form: None,
+            new_folder_dialog: None,
+            rename_dialog: None,
+            move_dialog: None,
+            delete_confirm: None,
+            change_password_dialog: None,
+            quick_connect_form: None,
             status_message: None,
         }
     }
@@ -176,20 +245,21 @@ impl MainApp {
         }
     }
 
+    /// Najde session podle id - nejdriv mezi ulozenymi servery v
+    /// trezoru, pak (pokud tam neni) mezi docasnymi "rychlymi
+    /// spojenimi". Diky tomu Connection tab funguje stejne, at uz je
+    /// za nim ulozeny nebo jednorazovy server.
+    fn find_session(&self, id: Uuid) -> Option<&Session> {
+        self.vault.data.servers.iter().find(|s| s.id == id).or_else(|| self.ad_hoc_sessions.iter().find(|s| s.id == id))
+    }
+
     // -- taby ---------------------------------------------------------
 
     fn tab_title(&self, kind: TabKind) -> String {
         match kind {
             TabKind::Home => "Domů".to_string(),
             TabKind::Settings => "Nastavení".to_string(),
-            TabKind::Connection(id) => self
-                .vault
-                .data
-                .servers
-                .iter()
-                .find(|s| s.id == id)
-                .map(|s| s.name.clone())
-                .unwrap_or_else(|| "Spojení".to_string()),
+            TabKind::Connection(id) => self.find_session(id).map(|s| s.name.clone()).unwrap_or_else(|| "Spojení".to_string()),
         }
     }
 
@@ -276,30 +346,43 @@ impl MainApp {
             ui.heading("Term-IX");
             ui.label(format!("verze {}", env!("CARGO_PKG_VERSION")));
             ui.add_space(20.0);
-            ui.label("Vyberte server vlevo, nebo přidejte nový přes menu Sessions.");
+            if self.is_guest {
+                ui.label("Hostovský režim: uložené servery nejsou dostupné.");
+                ui.label("Otevřete rychlé spojení přes menu Sessions → Nové rychlé spojení...");
+            } else {
+                ui.label("Vyberte server vlevo, nebo přidejte nový přes menu Sessions.");
+            }
         });
     }
 
     fn render_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading("Nastavení");
         ui.separator();
-        ui.label("Umístění trezoru:");
-        ui.code(self.vault.path().display().to_string());
+        if self.is_guest {
+            ui.label(
+                "Jste přihlášeni v hostovském režimu (bez hlavního hesla) - žádný trezor \
+                 se nečte ani nezapisuje. Pro přístup k uloženým serverům aplikaci restartujte \
+                 a zadejte hlavní heslo.",
+            );
+        } else {
+            ui.label("Umístění trezoru:");
+            ui.code(self.vault.path().display().to_string());
+            ui.add_space(12.0);
+            if ui.button("Exportovat trezor...").clicked() {
+                self.status_message =
+                    Some("Export/import trezoru z GUI je připraven v termx-vault, dialog v GUI zatím chybí (další krok).".to_string());
+            }
+        }
         ui.add_space(12.0);
         ui.label(
             "Vzhled: v této verzi je k dispozici jen 'terminálové' tmavé téma. \
              Modernější téma přibude jako další volba zde.",
         );
-        ui.add_space(12.0);
-        if ui.button("Exportovat trezor...").clicked() {
-            self.status_message =
-                Some("Export/import trezoru z GUI je připraven v termx-vault, dialog v GUI zatím chybí (další krok).".to_string());
-        }
     }
 
     fn render_connection(&mut self, ui: &mut egui::Ui, id: Uuid) {
-        let Some(session) = self.vault.data.servers.iter().find(|s| s.id == id) else {
-            ui.label("Tento server už neexistuje (byl smazán).");
+        let Some(session) = self.find_session(id) else {
+            ui.label("Tento server už neexistuje (byl smazán nebo šlo o dočasné rychlé spojení, které skončilo se zavřením tabu).");
             return;
         };
 
@@ -322,12 +405,19 @@ impl MainApp {
                     }
                 });
                 ui.menu_button("Sessions", |ui| {
-                    if ui.button("Nový server...").clicked() {
-                        self.new_session_form = Some(NewSessionForm::default());
-                        ui.close_menu();
+                    if !self.is_guest {
+                        if ui.button("Nový server...").clicked() {
+                            self.new_session_form = Some(NewSessionForm::default());
+                            ui.close_menu();
+                        }
+                        if ui.button("Nová složka...").clicked() {
+                            self.new_folder_dialog = Some(String::new());
+                            ui.close_menu();
+                        }
+                        ui.separator();
                     }
-                    if ui.button("Nová složka...").clicked() {
-                        self.new_folder_dialog = Some(String::new());
+                    if ui.button("Nové rychlé spojení...").clicked() {
+                        self.quick_connect_form = Some(QuickConnectForm::default());
                         ui.close_menu();
                     }
                 });
@@ -338,7 +428,7 @@ impl MainApp {
                         self.open_settings_tab();
                         ui.close_menu();
                     }
-                    if ui.button("Změnit heslo trezoru...").clicked() {
+                    if !self.is_guest && ui.button("Změnit heslo trezoru...").clicked() {
                         self.change_password_dialog = Some(ChangePasswordDialog::default());
                         ui.close_menu();
                     }
@@ -686,9 +776,95 @@ impl MainApp {
         }
     }
 
+    /// "Rychlé spojení" - vytvoří dočasnou session, která se NEUKLÁDÁ do
+    /// trezoru (jen do `ad_hoc_sessions` na dobu běhu aplikace), a rovnou
+    /// otevře její Connection tab. Hlavní cesta k připojení v hostovském
+    /// režimu, ale dostupné kdykoliv (i po přihlášení) pro spojení, které
+    /// si uživatel nechce ukládat.
+    fn show_quick_connect_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut form) = self.quick_connect_form.take() else { return };
+        let mut open = true;
+        let mut submit = false;
+        let mut cancel = false;
+
+        egui::Window::new("Nové rychlé spojení")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                egui::Grid::new("quick_connect_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                    ui.label("Název:");
+                    ui.text_edit_singleline(&mut form.name);
+                    ui.end_row();
+
+                    ui.label("Host:");
+                    ui.text_edit_singleline(&mut form.host);
+                    ui.end_row();
+
+                    ui.label("Port:");
+                    ui.text_edit_singleline(&mut form.port);
+                    ui.end_row();
+
+                    ui.label("Uživatel:");
+                    ui.text_edit_singleline(&mut form.username);
+                    ui.end_row();
+
+                    ui.label("Heslo:");
+                    ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
+                    ui.end_row();
+                });
+
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Toto spojení se nikam neukládá - platí jen do zavření tabu/aplikace.").small());
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Připojit").clicked() {
+                        submit = true;
+                    }
+                    if ui.button("Zrušit").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if cancel {
+            open = false;
+        }
+
+        if submit {
+            let port: u16 = form.port.trim().parse().unwrap_or(22);
+            let name = if form.name.trim().is_empty() { form.host.clone() } else { form.name.clone() };
+            let session = Session::new(
+                name,
+                Protocol::Ssh,
+                form.host.clone(),
+                port,
+                AuthMethod::Password {
+                    username: form.username.clone(),
+                    password: form.password.clone(),
+                },
+            );
+            let id = session.id;
+            self.ad_hoc_sessions.push(session);
+            self.open_session_tab(id);
+        } else if open {
+            self.quick_connect_form = Some(form);
+        }
+    }
+
     // -- strom serveru -----------------------------------------------
 
     fn show_tree(&mut self, ui: &mut egui::Ui) {
+        if self.is_guest {
+            ui.label(
+                egui::RichText::new("Hostovský režim - uložené servery nejsou vidět. Přihlaste se (restart aplikace) pro přístup k trezoru.")
+                    .small(),
+            );
+            ui.separator();
+            return;
+        }
+
         ui.horizontal(|ui| {
             if ui.button("+ Server").clicked() {
                 self.new_session_form = Some(NewSessionForm::default());
@@ -843,6 +1019,7 @@ impl MainApp {
         self.show_move_dialog(ctx);
         self.show_delete_confirm(ctx);
         self.show_change_password_dialog(ctx);
+        self.show_quick_connect_dialog(ctx);
 
         egui::SidePanel::left("session_tree")
             .resizable(true)
@@ -927,10 +1104,11 @@ impl TermxApp {
         let error = screen.error.clone();
 
         let mut submit = false;
+        let mut skip = false;
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                ui.add_space((ui.available_height() / 2.0 - 130.0).max(24.0));
+                ui.add_space((ui.available_height() / 2.0 - 160.0).max(24.0));
                 ui.heading("Term-IX");
                 ui.add_space(8.0);
                 ui.label(if vault_exists {
@@ -976,6 +1154,20 @@ impl TermxApp {
                             .small(),
                     );
                 }
+
+                ui.add_space(18.0);
+                ui.separator();
+                ui.add_space(6.0);
+                if ui.button("Pokračovat bez hesla").clicked() {
+                    skip = true;
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "Hostovský režim: uložené servery nejsou vidět a nová se neukládají - \
+                         jen rychlé spojení bez uložení.",
+                    )
+                    .small(),
+                );
             });
         });
 
@@ -984,6 +1176,12 @@ impl TermxApp {
         let LockState::Locked(screen) = &mut self.state else { return };
         screen.password = password.clone();
         screen.confirm = confirm.clone();
+
+        if skip {
+            let registry = self.registry.take().expect("registry byl jiz spotrebovan");
+            self.state = LockState::Unlocked(MainApp::new_guest(registry));
+            return;
+        }
 
         if !submit {
             return;
