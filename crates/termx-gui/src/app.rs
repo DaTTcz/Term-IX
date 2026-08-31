@@ -357,6 +357,25 @@ fn all_selection(data: &VaultData) -> (std::collections::HashSet<Uuid>, std::col
     (data.servers.iter().map(|s| s.id).collect(), data.folders.iter().cloned().collect())
 }
 
+/// Vystredi vyskakovaci okno (dialog) vuci hlavnimu oknu aplikace, misto
+/// vychozi pozice, kterou by jinak `egui::Window` zvolil sam (typicky
+/// blizko rohu, a u vice po sobe otevrenych dialogu porad na stejnem
+/// miste - jednotlive dialogy by se pak prekryvaly).
+///
+/// `pivot(CENTER_CENTER)` znamena, ze zadana pozice je STRED okna (ne
+/// jeho levy horni roh) - funguje tedy spravne i bez predem zname
+/// velikosti okna, ktera se navic u nekterych dialogu behem zobrazeni
+/// meni (napr. export po pridani chybove hlasky). `current_pos` (misto
+/// `default_pos`) navic drzi okno uprostred KAZDY snimek, ne jen pri
+/// prvnim zobrazeni - diky tomu se dialog vzdy objevi vystredeny, i
+/// kdyby si ho egui z minula pamatovalo jinde. Dusledek: takto
+/// vystredene okno uz jde s myslenim tahat za titulek - u techto
+/// kratkych modalnich dialogu (bez titulkoveho pruhu, `collapsible(false)`)
+/// to ale neni potreba.
+fn centered_dialog<'o>(window: egui::Window<'o>, ctx: &egui::Context) -> egui::Window<'o> {
+    window.pivot(egui::Align2::CENTER_CENTER).current_pos(ctx.screen_rect().center())
+}
+
 /// Cela aplikace PO uspesnem odemceni/vytvoreni trezoru (nebo po
 /// vstupu do hostovskeho rezimu, viz `is_guest`) - totozne s tim, jak
 /// vypadal puvodni `TermxApp` pred pridanim zamcene obrazovky.
@@ -682,7 +701,7 @@ impl MainApp {
         let mut submit = false;
         let mut cancel = false;
 
-        egui::Window::new("Nový server")
+        centered_dialog(egui::Window::new("Nový server"), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
@@ -758,7 +777,7 @@ impl MainApp {
         let mut confirmed = false;
         let mut cancel = false;
 
-        egui::Window::new("Nová složka")
+        centered_dialog(egui::Window::new("Nová složka"), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
@@ -796,7 +815,7 @@ impl MainApp {
         let mut confirmed = false;
         let mut cancel = false;
 
-        egui::Window::new("Přejmenovat")
+        centered_dialog(egui::Window::new("Přejmenovat"), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
@@ -842,7 +861,7 @@ impl MainApp {
         let mut confirmed = false;
         let mut cancel = false;
 
-        egui::Window::new("Přesunout do složky")
+        centered_dialog(egui::Window::new("Přesunout do složky"), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
@@ -895,7 +914,7 @@ impl MainApp {
             DeleteTarget::Folder(path) => format!("Opravdu smazat prázdnou složku „{path}“?"),
         };
 
-        egui::Window::new("Smazat").collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+        centered_dialog(egui::Window::new("Smazat"), ctx).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
             ui.label(&message);
             ui.horizontal(|ui| {
                 if ui.button("Smazat").clicked() {
@@ -940,7 +959,7 @@ impl MainApp {
         let mut confirmed = false;
         let mut cancel = false;
 
-        egui::Window::new("Změnit heslo trezoru")
+        centered_dialog(egui::Window::new("Změnit heslo trezoru"), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
@@ -1021,7 +1040,7 @@ impl MainApp {
         let mut submit = false;
         let mut cancel = false;
 
-        egui::Window::new("Nové rychlé spojení")
+        centered_dialog(egui::Window::new("Nové rychlé spojení"), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
@@ -1106,7 +1125,7 @@ impl MainApp {
         // se zde navic k otevirani slozek pridavaji zaskrtavatka.
         let tree = build_tree(&self.vault.data);
 
-        egui::Window::new("Exportovat trezor")
+        centered_dialog(egui::Window::new("Exportovat trezor"), ctx)
             .collapsible(false)
             .resizable(true)
             .default_width(440.0)
@@ -1288,7 +1307,7 @@ impl MainApp {
         let mut cancel = false;
         let mut browse = false;
 
-        egui::Window::new("Importovat trezor")
+        centered_dialog(egui::Window::new("Importovat trezor"), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
