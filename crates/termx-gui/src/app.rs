@@ -689,26 +689,31 @@ impl MainApp {
                     _ => None,
                 };
                 let is_dead = conn_state == Some(terminal::ConnState::Disconnected);
-                let label = egui::RichText::new(title.clone());
+                // Kdyz je tab "mrtvy", nazev zacina dvema mezerami navic -
+                // udela to v tlacitku misto pro puntik (viz nize), aby ho
+                // slo vykreslit PRIMO PRES pozadi tlacitka/pilulky, ne
+                // vedle ni (puvodni verze byla mimo tab a nebylo zjevne,
+                // ze k nemu patri - zpetna vazba "puntík je mimo tab
+                // takže není zřejmé že je k němu").
+                let label_text = if is_dead { format!("  {title}") } else { title.clone() };
+                let label = egui::RichText::new(label_text);
 
                 ui.horizontal(|ui| {
-                    // Cerveny puntik pred nazvem "mrtveho" tabu - vykresleny
-                    // PRIMO (`painter().circle_filled`), ne jako textovy
-                    // znak. Puvodni pokusy textovymi znaky selhaly ze dvou
-                    // ruznych duvodu: emoji 🔴 se v pouzitem pismu
-                    // vykreslilo v bezne (bile), ne vlastni cervene barve
-                    // (zpetna vazba "červený puntík nezčervenal, je pořád
-                    // bílý"), a nasledny ASCII vykricnik zase byl na
-                    // vlastni obarveni prilis maly/nenapadny (zpetna vazba
-                    // "tohle není vidět"). Vykresleny kruh na zadnem pismu
-                    // vubec nezavisi, takze je zaruceno, ze bude presne v
-                    // pozadovane barve a velikosti.
+                    let resp = ui.selectable_label(selected, label);
                     if is_dead {
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, ui.spacing().interact_size.y), egui::Sense::hover());
-                        ui.painter().circle_filled(rect.center(), 4.0, theme::DANGER);
-                        ui.add_space(2.0);
+                        // Cerveny puntik VYKRESLENY PRIMO NA tlacitko tabu
+                        // (uvnitr `resp.rect`, u leveho okraje - presne v
+                        // mezere, kterou pro nej `label_text` vyse
+                        // pripravil), ne jako samostatny znak/widget vedle
+                        // nej. Vykresleny kruh (ne textovy znak - viz
+                        // predchozi commity a zpetna vazba k nim) na
+                        // zadnem pismu nezavisi, takze je zaruceno, ze
+                        // bude presne v pozadovane barve a velikosti.
+                        let pad = ui.spacing().button_padding.x;
+                        let dot_center = egui::pos2(resp.rect.left() + pad + 4.0, resp.rect.center().y);
+                        ui.painter().circle_filled(dot_center, 4.0, theme::DANGER);
                     }
-                    if ui.selectable_label(selected, label).clicked() {
+                    if resp.clicked() {
                         to_select = Some(idx);
                     }
                     // Obycejne ASCII "X" (ne Unicode "✕"/Dingbats "×") -
