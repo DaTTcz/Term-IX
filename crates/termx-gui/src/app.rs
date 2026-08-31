@@ -109,6 +109,25 @@ struct ChangePasswordDialog {
     error: Option<String>,
 }
 
+#[derive(Default)]
+struct ExportDialog {
+    path: String,
+    password: String,
+    confirm: String,
+    error: Option<String>,
+}
+
+#[derive(Default)]
+struct ImportDialog {
+    path: String,
+    password: String,
+    /// `false` (vychozi) = sloucit s aktualnim obsahem trezoru (pridat
+    /// importovane servery/slozky k tem stavajicim). `true` = aktualni
+    /// obsah trezoru cely nahradit importem.
+    replace: bool,
+    error: Option<String>,
+}
+
 enum TreeAction {
     Open(Uuid),
     RenameSession(Uuid),
@@ -188,6 +207,8 @@ struct MainApp {
     delete_confirm: Option<DeleteTarget>,
     change_password_dialog: Option<ChangePasswordDialog>,
     quick_connect_form: Option<QuickConnectForm>,
+    export_dialog: Option<ExportDialog>,
+    import_dialog: Option<ImportDialog>,
 
     status_message: Option<String>,
 }
@@ -209,6 +230,8 @@ impl MainApp {
             delete_confirm: None,
             change_password_dialog: None,
             quick_connect_form: None,
+            export_dialog: None,
+            import_dialog: None,
             status_message: None,
         }
     }
@@ -235,6 +258,8 @@ impl MainApp {
             delete_confirm: None,
             change_password_dialog: None,
             quick_connect_form: None,
+            export_dialog: None,
+            import_dialog: None,
             status_message: None,
         }
     }
@@ -243,6 +268,23 @@ impl MainApp {
         if let Err(e) = self.vault.save(&self.master_password) {
             self.status_message = Some(format!("Ulozeni trezoru selhalo: {e}"));
         }
+    }
+
+    /// Zavre (zahodi rozepsany stav) vsech ostatnich dialogovych oken -
+    /// vola se VZDY pred otevrenim noveho dialogu, aby jich nemohlo byt
+    /// otevrenych vic najednou (uzivatel nahlasil, ze "pop-up okna se
+    /// vzajemne nezaviraji" a vznika chaos, kdyz jsou otevrena vsechna
+    /// najednou).
+    fn close_all_dialogs(&mut self) {
+        self.new_session_form = None;
+        self.new_folder_dialog = None;
+        self.rename_dialog = None;
+        self.move_dialog = None;
+        self.delete_confirm = None;
+        self.change_password_dialog = None;
+        self.quick_connect_form = None;
+        self.export_dialog = None;
+        self.import_dialog = None;
     }
 
     /// Najde session podle id - nejdriv mezi ulozenymi servery v
@@ -368,10 +410,16 @@ impl MainApp {
             ui.label("Umístění trezoru:");
             ui.code(self.vault.path().display().to_string());
             ui.add_space(12.0);
-            if ui.button("Exportovat trezor...").clicked() {
-                self.status_message =
-                    Some("Export/import trezoru z GUI je připraven v termx-vault, dialog v GUI zatím chybí (další krok).".to_string());
-            }
+            ui.horizontal(|ui| {
+                if ui.button("Exportovat trezor...").clicked() {
+                    self.close_all_dialogs();
+                    self.export_dialog = Some(ExportDialog::default());
+                }
+                if ui.button("Importovat trezor...").clicked() {
+                    self.close_all_dialogs();
+                    self.import_dialog = Some(ImportDialog::default());
+                }
+            });
         }
         ui.add_space(12.0);
         ui.label(
@@ -407,16 +455,19 @@ impl MainApp {
                 ui.menu_button("Sessions", |ui| {
                     if !self.is_guest {
                         if ui.button("Nový server...").clicked() {
+                            self.close_all_dialogs();
                             self.new_session_form = Some(NewSessionForm::default());
                             ui.close_menu();
                         }
                         if ui.button("Nová složka...").clicked() {
+                            self.close_all_dialogs();
                             self.new_folder_dialog = Some(String::new());
                             ui.close_menu();
                         }
                         ui.separator();
                     }
                     if ui.button("Nové rychlé spojení...").clicked() {
+                        self.close_all_dialogs();
                         self.quick_connect_form = Some(QuickConnectForm::default());
                         ui.close_menu();
                     }
@@ -429,6 +480,7 @@ impl MainApp {
                         ui.close_menu();
                     }
                     if !self.is_guest && ui.button("Změnit heslo trezoru...").clicked() {
+                        self.close_all_dialogs();
                         self.change_password_dialog = Some(ChangePasswordDialog::default());
                         ui.close_menu();
                     }
@@ -853,6 +905,209 @@ impl MainApp {
         }
     }
 
+    /// Vyexportuje aktualni obsah trezoru do samostatneho sifrovaneho
+    /// souboru (`Vault::export`) - klidne i s jinym heslem, nez ma
+    /// hlavni trezor (napr. pro predani serveru kolegovi).
+    fn show_export_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.export_dialog.take() else { return };
+        let mut open = true;
+        let mut confirmed = false;
+        let mut cancel = false;
+        let mut browse = false;
+
+        egui::Window::new("Exportovat trezor")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label("Cílový soubor:");
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut dialog.path);
+                    if ui.button("Procházet...").clicked() {
+                        browse = true;
+                    }
+                });
+                ui.add_space(6.0);
+                egui::Grid::new("export_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                    ui.label("Heslo exportu:");
+                    ui.add(egui::TextEdit::singleline(&mut dialog.password).password(true));
+                    ui.end_row();
+
+                    ui.label("Zopakujte heslo:");
+                    ui.add(egui::TextEdit::singleline(&mut dialog.confirm).password(true));
+                    ui.end_row();
+                });
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Heslo exportu může být jiné než hlavní heslo trezoru - hodí se \
+                         např. při předání serverů kolegovi.",
+                    )
+                    .small(),
+                );
+
+                if let Some(err) = &dialog.error {
+                    ui.add_space(6.0);
+                    ui.colored_label(egui::Color32::from_rgb(0xe0, 0x6c, 0x6c), err);
+                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Exportovat").clicked() {
+                        confirmed = true;
+                    }
+                    if ui.button("Zrušit").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        // "Procházet..." se resi az po .show() (viz stejny vzor u
+        // ostatnich dialogu) - nativni dialog souboru (`rfd`) je
+        // blokujici volani, takze se hodi az po vykresleni tohoto snimku.
+        if browse {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_title("Exportovat trezor jako...")
+                .set_file_name("term-ix-export.termx")
+                .add_filter("Term-IX trezor", &["termx"])
+                .save_file()
+            {
+                dialog.path = path.display().to_string();
+            }
+        }
+
+        if cancel {
+            open = false;
+        }
+
+        if confirmed {
+            let path = dialog.path.trim().to_string();
+            if path.is_empty() {
+                dialog.error = Some("Zadejte cílový soubor.".to_string());
+                self.export_dialog = Some(dialog);
+                return;
+            }
+            if dialog.password.is_empty() {
+                dialog.error = Some("Heslo exportu nesmí být prázdné.".to_string());
+                self.export_dialog = Some(dialog);
+                return;
+            }
+            if dialog.password != dialog.confirm {
+                dialog.error = Some("Zadaná hesla se neshodují.".to_string());
+                self.export_dialog = Some(dialog);
+                return;
+            }
+            match self.vault.export(&path, &dialog.password) {
+                Ok(()) => {
+                    self.status_message = Some(format!("Trezor exportován do {path}"));
+                }
+                Err(e) => {
+                    dialog.error = Some(format!("Export selhal: {e}"));
+                    self.export_dialog = Some(dialog);
+                }
+            }
+        } else if open {
+            self.export_dialog = Some(dialog);
+        }
+    }
+
+    /// Nacte samostatny exportovany soubor (`Vault::import`) a jeho
+    /// obsah bud sloucí s aktualnim trezorem, nebo (kdyz uzivatel
+    /// zaskrtne "Nahradit") jim aktualni obsah cely nahradi.
+    fn show_import_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.import_dialog.take() else { return };
+        let mut open = true;
+        let mut confirmed = false;
+        let mut cancel = false;
+        let mut browse = false;
+
+        egui::Window::new("Importovat trezor")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label("Zdrojový soubor:");
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut dialog.path);
+                    if ui.button("Procházet...").clicked() {
+                        browse = true;
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label("Heslo souboru:");
+                ui.add(egui::TextEdit::singleline(&mut dialog.password).password(true));
+                ui.add_space(8.0);
+                ui.checkbox(&mut dialog.replace, "Nahradit aktuální trezor (místo sloučení)");
+                ui.label(
+                    egui::RichText::new(
+                        "Sloučení přidá importované servery a složky k těm stávajícím. \
+                         Nahrazení aktuální trezor kompletně přepíše obsahem importu.",
+                    )
+                    .small(),
+                );
+
+                if let Some(err) = &dialog.error {
+                    ui.add_space(6.0);
+                    ui.colored_label(egui::Color32::from_rgb(0xe0, 0x6c, 0x6c), err);
+                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Importovat").clicked() {
+                        confirmed = true;
+                    }
+                    if ui.button("Zrušit").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if browse {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_title("Importovat trezor...")
+                .add_filter("Term-IX trezor", &["termx"])
+                .pick_file()
+            {
+                dialog.path = path.display().to_string();
+            }
+        }
+
+        if cancel {
+            open = false;
+        }
+
+        if confirmed {
+            let path = dialog.path.trim().to_string();
+            if path.is_empty() {
+                dialog.error = Some("Zadejte zdrojový soubor.".to_string());
+                self.import_dialog = Some(dialog);
+                return;
+            }
+            match Vault::import(&path, &dialog.password) {
+                Ok(imported) => {
+                    if dialog.replace {
+                        self.vault.data = imported;
+                    } else {
+                        for folder in imported.folders {
+                            if !self.vault.data.folders.contains(&folder) {
+                                self.vault.data.folders.push(folder);
+                            }
+                        }
+                        self.vault.data.servers.extend(imported.servers);
+                    }
+                    self.save_vault();
+                    self.status_message = Some("Trezor byl úspěšně importován.".to_string());
+                }
+                Err(e) => {
+                    dialog.error = Some(format!("Import selhal: {e}"));
+                    self.import_dialog = Some(dialog);
+                }
+            }
+        } else if open {
+            self.import_dialog = Some(dialog);
+        }
+    }
+
     // -- strom serveru -----------------------------------------------
 
     fn show_tree(&mut self, ui: &mut egui::Ui) {
@@ -867,9 +1122,11 @@ impl MainApp {
 
         ui.horizontal(|ui| {
             if ui.button("+ Server").clicked() {
+                self.close_all_dialogs();
                 self.new_session_form = Some(NewSessionForm::default());
             }
             if ui.button("+ Složka").clicked() {
+                self.close_all_dialogs();
                 self.new_folder_dialog = Some(String::new());
             }
         });
@@ -946,31 +1203,32 @@ impl MainApp {
             TreeAction::Open(id) => self.open_session_tab(id),
             TreeAction::RenameSession(id) => {
                 if let Some(session) = self.vault.data.servers.iter().find(|s| s.id == id) {
-                    self.rename_dialog = Some(RenameDialog {
-                        target: RenameTarget::Session(id),
-                        value: session.name.clone(),
-                    });
+                    let value = session.name.clone();
+                    self.close_all_dialogs();
+                    self.rename_dialog = Some(RenameDialog { target: RenameTarget::Session(id), value });
                 }
             }
             TreeAction::MoveSession(id) => {
                 if let Some(session) = self.vault.data.servers.iter().find(|s| s.id == id) {
-                    self.move_dialog = Some(MoveDialog {
-                        session_id: id,
-                        value: session.group.clone().unwrap_or_default(),
-                    });
+                    let value = session.group.clone().unwrap_or_default();
+                    self.close_all_dialogs();
+                    self.move_dialog = Some(MoveDialog { session_id: id, value });
                 }
             }
             TreeAction::DeleteSession(id) => {
+                self.close_all_dialogs();
                 self.delete_confirm = Some(DeleteTarget::Session(id));
             }
             TreeAction::RenameFolder(path) => {
                 let current_name = path.rsplit('/').next().unwrap_or(&path).to_string();
+                self.close_all_dialogs();
                 self.rename_dialog = Some(RenameDialog {
                     target: RenameTarget::Folder(path),
                     value: current_name,
                 });
             }
             TreeAction::DeleteFolder(path) => {
+                self.close_all_dialogs();
                 self.delete_confirm = Some(DeleteTarget::Folder(path));
             }
         }
@@ -1020,6 +1278,8 @@ impl MainApp {
         self.show_delete_confirm(ctx);
         self.show_change_password_dialog(ctx);
         self.show_quick_connect_dialog(ctx);
+        self.show_export_dialog(ctx);
+        self.show_import_dialog(ctx);
 
         egui::SidePanel::left("session_tree")
             .resizable(true)

@@ -16,3 +16,6 @@ uuid = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Nativni "Ulozit jako.../Otevrit soubor..." dialog pro export/import
+# trezoru (tlacitko "Prochazet..." v prislusnych dialozich v app.rs).
+rfd = { workspace = true }
