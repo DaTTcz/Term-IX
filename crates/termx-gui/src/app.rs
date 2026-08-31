@@ -933,36 +933,55 @@ impl MainApp {
             ui.heading("Připojit k novému serveru");
             ui.add_space(10.0);
 
-            egui::Grid::new("home_connect_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                ui.label("Název:");
-                ui.text_edit_singleline(&mut self.home_connect_form.name);
-                ui.end_row();
-
-                // Slozka dava smysl jen kdyz se bude i ukladat (viz
-                // `save` nize) - u hosta (zadny trezor) i u docasneho
-                // rychleho spojeni (`save == false`) se radek vubec
-                // nezobrazi.
-                if !self.is_guest && self.home_connect_form.save {
-                    ui.label("Složka:");
-                    ui.text_edit_singleline(&mut self.home_connect_form.folder);
-                    ui.end_row();
+            // `egui::Grid` bohuzel neni "center-aware" - i uvnitr
+            // `vertical_centered` (viz vyse) zacina vzdy uplne vlevo v
+            // ramci dostupne sirky sveho rodice (drzi se `ui.cursor()`,
+            // ne stredoveho zarovnani jako normalni jednotlive widgety),
+            // proto na obrazovce vysel formular pribity k levemu okraji
+            // ("formulář dáme na střed"). Oprava: Grid se vlozi do
+            // vlastniho `ui` s pevnou sirkou (`HOME_FORM_WIDTH`), pred
+            // ktere se rucne vlozi polovina zbyvajiciho prostoru
+            // (`ui.add_space`) - tim se cely blok manualne vystredi bez
+            // ohledu na to, jak siroke zrovna Home tab je.
+            const HOME_FORM_WIDTH: f32 = 340.0;
+            ui.horizontal(|ui| {
+                let avail = ui.available_width();
+                if avail > HOME_FORM_WIDTH {
+                    ui.add_space((avail - HOME_FORM_WIDTH) / 2.0);
                 }
+                ui.allocate_ui(egui::vec2(HOME_FORM_WIDTH, 0.0), |ui| {
+                    egui::Grid::new("home_connect_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                        ui.label("Název:");
+                        ui.text_edit_singleline(&mut self.home_connect_form.name);
+                        ui.end_row();
 
-                ui.label("Host:");
-                ui.text_edit_singleline(&mut self.home_connect_form.host);
-                ui.end_row();
+                        // Slozka dava smysl jen kdyz se bude i ukladat
+                        // (viz `save` nize) - u hosta (zadny trezor) i u
+                        // docasneho rychleho spojeni (`save == false`)
+                        // se radek vubec nezobrazi.
+                        if !self.is_guest && self.home_connect_form.save {
+                            ui.label("Složka:");
+                            ui.text_edit_singleline(&mut self.home_connect_form.folder);
+                            ui.end_row();
+                        }
 
-                ui.label("Port:");
-                ui.text_edit_singleline(&mut self.home_connect_form.port);
-                ui.end_row();
+                        ui.label("Host:");
+                        ui.text_edit_singleline(&mut self.home_connect_form.host);
+                        ui.end_row();
 
-                ui.label("Uživatel:");
-                ui.text_edit_singleline(&mut self.home_connect_form.username);
-                ui.end_row();
+                        ui.label("Port:");
+                        ui.text_edit_singleline(&mut self.home_connect_form.port);
+                        ui.end_row();
 
-                ui.label("Heslo:");
-                ui.add(egui::TextEdit::singleline(&mut self.home_connect_form.password).password(true));
-                ui.end_row();
+                        ui.label("Uživatel:");
+                        ui.text_edit_singleline(&mut self.home_connect_form.username);
+                        ui.end_row();
+
+                        ui.label("Heslo:");
+                        ui.add(egui::TextEdit::singleline(&mut self.home_connect_form.password).password(true));
+                        ui.end_row();
+                    });
+                });
             });
 
             ui.add_space(6.0);
