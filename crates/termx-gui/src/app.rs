@@ -21,10 +21,34 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use termx_core::{AuthMethod, ModuleRegistry, Protocol, Session};
+use termx_update::LatestRelease;
 use termx_vault::{Vault, VaultData};
 use uuid::Uuid;
 
 use crate::theme;
+
+/// Stejne logo jako u ikony aplikace (`lib.rs`) - zvlast nacteno i zde,
+/// aby ho slo vykreslit jako obrazek primo v Home tabu (`render_home`),
+/// ne jen pouzit jako ikonu okna/tasklisty.
+const LOGO_BYTES: &[u8] = include_bytes!("../../../assets/icons/hicolor/128x128/apps/term-ix.png");
+
+/// Stav kontroly dostupnosti nove verze (viz `MainApp::maybe_start_update_check`
+/// a `MainApp::poll_update_check`) - zobrazuje se v Home tabu.
+enum UpdateCheck {
+    /// Jeste nezacalo (hned po startu aplikace/nacteni Home tabu se
+    /// zmeni na `Checking`).
+    NotStarted,
+    /// Kontrola bezi na pozadi (samostatne vlakno - sitovy pozadavek
+    /// na GitHub nesmi zablokovat vykreslovani GUI).
+    Checking,
+    /// Aktualni verze je nejnovejsi dostupna.
+    UpToDate,
+    /// Na GitHubu je dostupna novejsi verze.
+    Available(LatestRelease),
+    /// Kontrolu se nepodarilo provest (napr. bez pripojeni k internetu) -
+    /// nikdy nesmi byt fatalni, jen se to takto tise zobrazi v Home tabu.
+    Failed(String),
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TabKind {
@@ -410,6 +434,18 @@ struct MainApp {
     export_dialog: Option<ExportDialog>,
     import_dialog: Option<ImportDialog>,
 
+    /// Logo pro Home tab - nacte a nakesuje se jako GPU textura az pri
+    /// prvnim vykresleni (`MainApp::logo_texture`), ne uz pri startu
+    /// aplikace.
+    logo_texture: Option<egui::TextureHandle>,
+    /// Stav kontroly dostupnosti nove verze pro Home tab, viz
+    /// [`UpdateCheck`].
+    update_check: UpdateCheck,
+    /// Prijimac vysledku kontroly aktualizace ze samostatneho vlakna
+    /// (viz `maybe_start_update_check`) - `None`, kdyz zadna kontrola
+    /// zrovna nebezi (jeste nezacala, nebo uz vysledek dorazil).
+    update_rx: Option<std::sync::mpsc::Receiver<Result<Option<LatestRelease>, String>>>,
+
     status_message: Option<String>,
 }
 
@@ -432,6 +468,9 @@ impl MainApp {
             quick_connect_form: None,
             export_dialog: None,
             import_dialog: None,
+            logo_texture: None,
+            update_check: UpdateCheck::NotStarted,
+            update_rx: None,
             status_message: None,
         }
     }
@@ -460,6 +499,9 @@ impl MainApp {
             quick_connect_form: None,
             export_dialog: None,
             import_dialog: None,
+            logo_texture: None,
+            update_check: UpdateCheck::NotStarted,
+            update_rx: None,
             status_message: None,
         }
     }
@@ -582,12 +624,107 @@ impl MainApp {
         }
     }
 
+    /// Nacte logo aplikace jako GPU texturu (jen jednou, pak uz se
+    /// vraci nakesovany `TextureHandle` - je levne ho klonovat, jde jen
+    /// o referenci). Pouziva se v Home tabu (`render_home`).
+    fn logo_texture(&mut self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+        if self.logo_texture.is_none() {
+            if let Ok(img) = image::load_from_memory(LOGO_BYTES) {
+                let img = img.to_rgba8();
+                let (w, h) = img.dimensions();
+                let color_image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw());
+                self.logo_texture = Some(ctx.load_texture("term-ix-logo", color_image, egui::TextureOptions::default()));
+            }
+        }
+        self.logo_texture.clone()
+    }
+
+    /// Spusti kontrolu dostupnosti nove verze na samostatnem vlakne -
+    /// nejvyse jednou za beh aplikace (viz `UpdateCheck::NotStarted`).
+    /// Sitovy pozadavek nesmi bezet primo v render smycce, jinak by
+    /// pri pomalem/vypadlem pripojeni zamrzlo cele GUI.
+    fn maybe_start_update_check(&mut self) {
+        if !matches!(self.update_check, UpdateCheck::NotStarted) {
+            return;
+        }
+        self.update_check = UpdateCheck::Checking;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let current_version = env!("CARGO_PKG_VERSION").to_string();
+        std::thread::spawn(move || {
+            let result = termx_update::check_latest_version(&current_version).map_err(|e| e.to_string());
+            // Prijemce uz nemusi existovat (napr. aplikace se mezitim
+            // zavrela) - poslani se pak proste nezdari, nic se nedeje.
+            let _ = tx.send(result);
+        });
+        self.update_rx = Some(rx);
+    }
+
+    /// Vyzvedne vysledek kontroly aktualizace, pokud uz z pozadi
+    /// dorazil (nikdy neceka - `try_recv`).
+    fn poll_update_check(&mut self) {
+        let Some(rx) = &self.update_rx else { return };
+        match rx.try_recv() {
+            Ok(Ok(Some(latest))) => {
+                self.update_check = UpdateCheck::Available(latest);
+                self.update_rx = None;
+            }
+            Ok(Ok(None)) => {
+                self.update_check = UpdateCheck::UpToDate;
+                self.update_rx = None;
+            }
+            Ok(Err(e)) => {
+                self.update_check = UpdateCheck::Failed(e);
+                self.update_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                // Jeste nic - zkusi se znovu pristi snimek.
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.update_check = UpdateCheck::Failed("kontrola aktualizace neocekavane skoncila".to_string());
+                self.update_rx = None;
+            }
+        }
+    }
+
     fn render_home(&mut self, ui: &mut egui::Ui) {
+        let logo = self.logo_texture(ui.ctx());
+
         ui.vertical_centered(|ui| {
-            ui.add_space(48.0);
+            ui.add_space(32.0);
+            if let Some(logo) = logo {
+                ui.add(egui::Image::new(&logo).max_size(egui::vec2(96.0, 96.0)));
+                ui.add_space(10.0);
+            }
             ui.heading("Term-IX");
             ui.label(format!("verze {}", env!("CARGO_PKG_VERSION")));
-            ui.add_space(20.0);
+            ui.label(egui::RichText::new("DaTTcz").small());
+            ui.add_space(10.0);
+
+            match &self.update_check {
+                UpdateCheck::NotStarted | UpdateCheck::Checking => {
+                    ui.label(egui::RichText::new("Kontroluji dostupnost aktualizace…").small());
+                }
+                UpdateCheck::UpToDate => {
+                    ui.colored_label(theme::ACCENT, "Máte nejnovější verzi.");
+                }
+                UpdateCheck::Available(latest) => {
+                    ui.colored_label(egui::Color32::from_rgb(0xe6, 0xc2, 0x5a), format!("Dostupná je nová verze {}.", latest.version));
+                    if ui.button("Otevřít stránku s vydáním").clicked() {
+                        ui.ctx().open_url(egui::OpenUrl {
+                            url: latest.url.clone(),
+                            new_tab: true,
+                        });
+                    }
+                }
+                UpdateCheck::Failed(e) => {
+                    ui.label(egui::RichText::new(format!("Kontrolu aktualizace se nepodařilo provést ({e}).")).small());
+                }
+            }
+
+            ui.add_space(18.0);
+            ui.separator();
+            ui.add_space(16.0);
+
             if self.is_guest {
                 ui.label("Hostovský režim: uložené servery nejsou dostupné.");
                 ui.label("Otevřete rychlé spojení přes menu Sessions → Nové rychlé spojení...");
@@ -1555,6 +1692,9 @@ impl MainApp {
     /// primo - o dispatch mezi zamcenou obrazovkou a touto (odemcenou)
     /// aplikaci se stara vnejsi [`TermxApp`] nize.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.maybe_start_update_check();
+        self.poll_update_check();
+
         self.top_menu(ctx);
 
         self.show_new_session_dialog(ctx);

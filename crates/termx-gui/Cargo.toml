@@ -10,6 +10,10 @@ description = "Term-IX GUI (egui/eframe): menu, strom serveru, taby (Home/Nastav
 [dependencies]
 termx-core = { workspace = true }
 termx-vault = { workspace = true }
+# Kontrola dostupnosti nove verze (bez stahovani) pro zobrazeni v Home
+# tabu - viz `termx_update::check_latest_version` volane na
+# samostatnem vlakne z `app.rs`.
+termx-update = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
