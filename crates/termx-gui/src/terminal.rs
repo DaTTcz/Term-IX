@@ -48,14 +48,19 @@
 //! Architektura kolem (SSH vlakno v `termx-ssh`, kanaly, GUI tab) na
 //! techto detailech nezavisi - jde o lokalizovanou opravu jednoho
 //! souboru.
-//! Odlozene zadani prihlasovacich udaju (`ConnState::AwaitingCredentials`,
-//! `render_credentials_prompt`) take nepridava zadne nove nejiste API na
-//! teto strane - SSH spojeni (`spawn_ssh_session`) se pořád zaklada
-//! primo v `new`, stejne jako drive; jedina zmena je NOVA VARIANTA
-//! udalosti `SshEvent::AwaitingCredentials` (posilana z `termx-ssh`, viz
-//! tamni POZNAMKA K OVERENI) a odpovidajici nova varianta prikazu
-//! `SshInput::Credentials` (`submit_credentials` ji jen posle po jiz
-//! existujicim `handle.input_tx` - zadne nove spojeni/vlakno).
+//! Odlozene zadani prihlasovacich udaju (`ConnState::AwaitingCredentials`)
+//! take nepridava zadne nove nejiste API na teto strane - SSH spojeni
+//! (`spawn_ssh_session`) se pořád zaklada primo v `new`, stejne jako
+//! drive; jedina zmena je NOVA VARIANTA udalosti `SshEvent::AwaitingCredentials`
+//! (posilana z `termx-ssh`, viz tamni POZNAMKA K OVERENI) a odpovidajici
+//! nova varianta prikazu `SshInput::Credentials` (`submit_credentials` ji
+//! jen posle po jiz existujicim `handle.input_tx` - zadne nove spojeni/
+//! vlakno). Prihlasovaci "prompt" ("login as: "/"Password: ") se navic
+//! misto samostatneho formulare vykresluje primo jako soucast
+//! terminaloveho bufferu (`handle_credentials_keyboard`/`local_echo`) -
+//! zadna nova zavislost, jen znovupouziti uz existujiciho
+//! `self.parser.advance(&mut self.term, byte)`, ktere jinak `pump`
+//! pouziva pro skutecna data ze site.
 //!
 //! ZNAME OMEZENI TETO PRVNI VERZE (vedomy kompromis kvuli rozsahu):
 //! - Velikost terminalu se prizpusobuje velikosti Connection tabu
@@ -161,13 +166,14 @@ impl EventListener for EventProxy {
 pub enum ConnState {
     /// SSH TRANSPORT uz je navazan (TCP + vymena klicu, viz
     /// `termx_ssh::run_session`), ale `Session::auth` nemela
-    /// vyplneneho uzivatele, takze se ceka, az ho uzivatel primo v
-    /// tomto tabu doplni (viz `TerminalSession::render_credentials_prompt`) -
-    /// stejne jako u obycejneho `ssh` klienta, ktery se taky nejdriv
-    /// pripoji a teprve pak se zepta na heslo. Typicky nastane po Home
-    /// formulari odeslanem jen s hostem/portem, viz zpetna vazba "já
-    /// bych raději viděl už přímo komunikaci se serverem a tam až
-    /// dával uživatele a heslo".
+    /// vyplneneho uzivatele, takze se ceka, az ho uzivatel doplni -
+    /// primo napsanim do samotneho terminalu (viz
+    /// `TerminalSession::handle_credentials_keyboard`), stejne jako u
+    /// obycejneho `ssh` klienta ("login as: "/"Password: " prompt jeste
+    /// pred autentizaci). Zadny samostatny formular/dialog uz se
+    /// nezobrazuje - "mezikus s okénky pro přihlášení" byl podle
+    /// zpetne vazby matouci ("s mezikusem kdy mám okénka pro přihlášení
+    /// je matoucí").
     AwaitingCredentials,
     /// Prvni navazovani spojeni, nebo prubeh automatickeho/rucniho
     /// pokusu o jeho obnoveni (viz `reconnect`).
@@ -176,6 +182,15 @@ pub enum ConnState {
     /// Spojeni skoncilo - at uz chybou (`error` je pak `Some`), nebo
     /// cistě (napr. `exit`/`logout` na druhe strane).
     Disconnected,
+}
+
+/// Ktery udaj se prave zadava v prihlasovacim "promptu" primo v
+/// terminalu behem `ConnState::AwaitingCredentials` - viz
+/// `TerminalSession::handle_credentials_keyboard`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CredentialsStage {
+    Username,
+    Password,
 }
 
 /// Jedno bezici SSH spojeni napojene na vestaveny terminal - jeden
@@ -221,21 +236,20 @@ pub struct TerminalSession {
     stats: Option<SystemStats>,
     /// `true` od prijeti `SshEvent::AwaitingCredentials` (transport
     /// navazan, ale chybi uzivatel/heslo) - viz
-    /// [`ConnState::AwaitingCredentials`]/`render_credentials_prompt`.
-    /// Po odeslani formulare (`submit_credentials`) uz zustava `false`
+    /// [`ConnState::AwaitingCredentials`]/`handle_credentials_keyboard`.
+    /// Po odeslani udaju (`submit_credentials`) uz zustava `false`
     /// natrvalo (i kdyz spojeni pozdeji spadne a `reconnect` ho obnovi -
     /// tehdy uz `session.auth` ma uzivatele/heslo vyplnene, takze se
     /// znovu ptat netreba).
     awaiting_credentials: bool,
-    /// Rozepsany uzivatel/heslo v `render_credentials_prompt`, nez se
-    /// odesle (viz `submit_credentials`).
+    /// Ktery z dvou kroku prihlasovaciho "promptu" prave probiha - viz
+    /// [`CredentialsStage`]/`handle_credentials_keyboard`.
+    credentials_stage: CredentialsStage,
+    /// Rozepsany uzivatel/heslo, jak je uzivatel postupne napsal primo
+    /// do terminalu (viz `handle_credentials_keyboard`), nez se po
+    /// stisknuti Enter na konci hesla odesle (`submit_credentials`).
     pending_username: String,
     pending_password: String,
-    /// Stejny ucel jako `LockScreen::focus_requested` v `app.rs` - pole
-    /// uzivatele v `render_credentials_prompt` se ma fokusnout jen
-    /// jednou (prvni snimek), ne kazdy snimek znovu (to by bojovalo s
-    /// uzivatelovym vlastnim kliknutim treba do pole hesla).
-    credentials_focus_requested: bool,
 }
 
 impl TerminalSession {
@@ -265,9 +279,9 @@ impl TerminalSession {
             last_reconnect_attempt: None,
             stats: None,
             awaiting_credentials: false,
+            credentials_stage: CredentialsStage::Username,
             pending_username: String::new(),
             pending_password: String::new(),
-            credentials_focus_requested: false,
         }
     }
 
@@ -285,14 +299,15 @@ impl TerminalSession {
         }
     }
 
-    /// Zpracuje odeslani prihlasovacich udaju z `render_credentials_prompt` -
-    /// SSH spojeni uz beselo (transport je navazan, viz `pump`/
-    /// `SshEvent::AwaitingCredentials`), takze se jen posle
-    /// `SshInput::Credentials` po jiz existujicim kanalu; zadne nove
-    /// spojeni se nezaklada. Udaje se navic ulozi primo do
-    /// `self.session` (diky tomu pripadny pozdejsi `reconnect` uz zadne
-    /// dalsi doplneni nepotrebuje - pouzije stejnou, uz jednou zadanou,
-    /// kombinaci uzivatel/heslo).
+    /// Zpracuje odeslani prihlasovacich udaju, jak je uzivatel napsal
+    /// primo do terminalu (viz `handle_credentials_keyboard`, volano po
+    /// Enteru na konci zadavani hesla) - SSH spojeni uz bezelo
+    /// (transport je navazan, viz `pump`/`SshEvent::AwaitingCredentials`),
+    /// takze se jen posle `SshInput::Credentials` po jiz existujicim
+    /// kanalu; zadne nove spojeni se nezaklada. Udaje se navic ulozi
+    /// primo do `self.session` (diky tomu pripadny pozdejsi `reconnect`
+    /// uz zadne dalsi doplneni nepotrebuje - pouzije stejnou, uz jednou
+    /// zadanou, kombinaci uzivatel/heslo).
     fn submit_credentials(&mut self) {
         let username = self.pending_username.trim().to_string();
         if username.is_empty() {
@@ -400,6 +415,15 @@ impl TerminalSession {
                 }
                 Ok(SshEvent::AwaitingCredentials) => {
                     self.awaiting_credentials = true;
+                    self.credentials_stage = CredentialsStage::Username;
+                    self.pending_username.clear();
+                    self.pending_password.clear();
+                    // Uvodni "prompt", rucne zapsany rovnou do stejneho
+                    // terminaloveho bufferu, ktery pak `render` normalne
+                    // vykresli - stejny text, jaky by na tomto miste
+                    // ukazal skutecny `ssh` klient. Nasleduje `pending_username`
+                    // znak po znaku (viz `handle_credentials_keyboard`).
+                    self.local_echo(b"login as: ");
                 }
                 Ok(SshEvent::Error(e)) => {
                     self.error = Some(e);
@@ -428,6 +452,18 @@ impl TerminalSession {
         let _ = self.handle.input_tx.send(SshInput::Data(bytes));
     }
 
+    /// Rucne "doopise" dane bajty primo do terminaloveho bufferu
+    /// (stejnou cestou, jakou normalne prochazeji data prijata ze
+    /// serveru, viz `pump`) - pouzito pro lokalni prihlasovaci prompt
+    /// (`handle_credentials_keyboard`), ktery ZE SITE nikam nechodi,
+    /// takze bez tohoto rucniho zapisu by v terminalu vubec nebyl
+    /// videt.
+    fn local_echo(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.parser.advance(&mut self.term, b);
+        }
+    }
+
     /// Zachyti klavesovy vstup z aktualniho snimku a preposle jej (jako
     /// syrove bajty/ANSI escape sekvence) do SSH spojeni.
     fn handle_keyboard(&self, ui: &egui::Ui) {
@@ -449,6 +485,88 @@ impl TerminalSession {
         }
     }
 
+    /// Zachyti klavesovy vstup behem `ConnState::AwaitingCredentials` -
+    /// na rozdil od `handle_keyboard` (ktera bajty posila primo na SSH
+    /// kanal) tady znaky NIKAM PO SITI nejdou - jen se (u uzivatele)
+    /// rucne "doopisou" primo do terminaloveho bufferu (`local_echo`),
+    /// takze prihlasovaci prompt vypada jako soucast normalniho
+    /// terminalu, presne jak se chova skutecny `ssh` klient. Heslo se
+    /// (take stejne jako u `ssh`) vubec neechuje - zadny znak, zadna
+    /// hvezdicka; i Backspace pri psani hesla zustava tiche (jen zmensi
+    /// `pending_password`, na obrazovce se nic nezmeni).
+    fn handle_credentials_keyboard(&mut self, ui: &egui::Ui) {
+        let events = ui.input(|i| i.events.clone());
+        for event in events {
+            match event {
+                egui::Event::Text(text) | egui::Event::Paste(text) => {
+                    for ch in text.chars() {
+                        // Ridici znaky (Enter/Backspace/...) uz reseji
+                        // samostatne vetve `Event::Key` nize - `Text`
+                        // by je normalne poslat nemelo, ale pro jistotu
+                        // se tu jeste jednou vyfiltruji.
+                        if !ch.is_control() {
+                            self.credentials_push_char(ch);
+                        }
+                    }
+                }
+                egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } => {
+                    self.credentials_backspace();
+                }
+                egui::Event::Key { key: egui::Key::Enter, pressed: true, .. } => {
+                    self.credentials_submit_line();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn credentials_push_char(&mut self, ch: char) {
+        match self.credentials_stage {
+            CredentialsStage::Username => {
+                self.pending_username.push(ch);
+                let mut buf = [0u8; 4];
+                self.local_echo(ch.encode_utf8(&mut buf).as_bytes());
+            }
+            CredentialsStage::Password => {
+                self.pending_password.push(ch);
+            }
+        }
+    }
+
+    fn credentials_backspace(&mut self) {
+        match self.credentials_stage {
+            CredentialsStage::Username => {
+                if self.pending_username.pop().is_some() {
+                    // Posun kurzoru zpet, prepsani mezerou, posun zpet
+                    // znovu - standardni zpusob, jak se "smaze" znak na
+                    // terminalu, ktery sam o sobe zadny backspace
+                    // nezna.
+                    self.local_echo(b"\x08 \x08");
+                }
+            }
+            CredentialsStage::Password => {
+                self.pending_password.pop();
+            }
+        }
+    }
+
+    fn credentials_submit_line(&mut self) {
+        match self.credentials_stage {
+            CredentialsStage::Username => {
+                if self.pending_username.trim().is_empty() {
+                    return;
+                }
+                self.local_echo(b"\r\n");
+                self.local_echo(b"Password: ");
+                self.credentials_stage = CredentialsStage::Password;
+            }
+            CredentialsStage::Password => {
+                self.local_echo(b"\r\n");
+                self.submit_credentials();
+            }
+        }
+    }
+
     /// Vykresli aktualni stav terminalu do daneho `Ui` (cely obsah
     /// Connection tabu) a zpracuje klavesovy vstup z tohoto snimku.
     /// `auto_reconnect` je aktualni hodnota nastaveni "automaticky se
@@ -458,19 +576,16 @@ impl TerminalSession {
     pub fn render(&mut self, ui: &mut egui::Ui, auto_reconnect: bool) {
         self.pump();
 
+        // Behem prihlasovaciho promptu (`ConnState::AwaitingCredentials`)
+        // se klavesnice zpracovava JINAK - znaky nejdou na SSH kanal
+        // (jeste neni autentizovany), ale rucne se "doopisou" primo do
+        // terminaloveho bufferu, viz `handle_credentials_keyboard`. Ve
+        // vsech ostatnich stavech beze zmeny jako drive.
         if self.state() == ConnState::AwaitingCredentials {
-            // Transport uz je navazan (viz `pump`/`SshEvent::AwaitingCredentials`),
-            // jen chybi uzivatel/heslo - misto terminalu (a bez
-            // `handle_keyboard`/`resize_to_fit`/status proužku, ktere
-            // tu jeste nemaji co delat, dokud neni relace autentizovana)
-            // se zobrazi prihlasovaci formular. Po jeho odeslani
-            // (`submit_credentials`) uz dalsi snimek pokracuje normalne -
-            // `state()` bude `Connecting`, nez dorazi `SshEvent::Connected`.
-            self.render_credentials_prompt(ui);
-            return;
+            self.handle_credentials_keyboard(ui);
+        } else {
+            self.handle_keyboard(ui);
         }
-
-        self.handle_keyboard(ui);
 
         // Dokud je tab otevreny/aktivni, chceme obrazovku prubezne
         // obcerstvovat i bez interakce uzivatele (aby se novy vystup ze
@@ -479,12 +594,10 @@ impl TerminalSession {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
 
         match self.state() {
-            // Nedosazitelne v praxi - `AwaitingCredentials` konci
-            // brzkym `return` uplne nahore v teto metode, takze se sem
-            // tok nikdy nedostane. Prazdna vetev misto `unreachable!()`
-            // zamerne - kdyby se tento predpoklad nekdy prestal drzet,
-            // je lepsi tab jen chvíli nic nevykreslit, nez shodit celou
-            // aplikaci panikou.
+            // Zadna hlaska nad terminalem - prihlasovaci prompt ("login
+            // as: "/"Password: ") uz je videt primo V terminalu (viz
+            // `pump`/`handle_credentials_keyboard`), zadny dalsi banner
+            // navic netreba.
             ConnState::AwaitingCredentials => {}
             ConnState::Disconnected => {
                 // Kdyz je automaticke obnoveni zapnute, zkusi se samo -
@@ -530,58 +643,6 @@ impl TerminalSession {
         egui::ScrollArea::both().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
             ui.add(egui::Label::new(job).selectable(false));
         });
-    }
-
-    /// Inline prihlasovaci formular zobrazeny MISTO terminalu, dokud je
-    /// stav `ConnState::AwaitingCredentials` (viz `render`) - SSH
-    /// transport uz je v tuto chvili navazan (viz `pump`/
-    /// `SshEvent::AwaitingCredentials`), jen chybi uzivatel/heslo,
-    /// protoze session (typicky z Home formulare, viz
-    /// `app.rs::submit_home_connect`) mela vyplneneho jen hosta/port
-    /// ("chci jen dočasné spojení, nebo si nejsem jistý heslem" - viz
-    /// zpetna vazba "já bych raději viděl už přímo komunikaci se
-    /// serverem a tam až dával uživatele a heslo"). Po odeslani
-    /// formulare (`submit_credentials`) se udaje jen posilaji po JIZ
-    /// existujicim spojeni - lze tak klidne zkouset i vice pokusu primo
-    /// tady, bez zakladani noveho spojeni od znova.
-    fn render_credentials_prompt(&mut self, ui: &mut egui::Ui) {
-        let mut submit = false;
-
-        ui.vertical_centered(|ui| {
-            ui.add_space(32.0);
-            ui.label(format!("Spojeno s {} - zadejte přihlašovací údaje:", format_host_label(&self.session)));
-            ui.add_space(10.0);
-
-            egui::Grid::new(("term_credentials_grid", self.session.id)).num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                ui.label("Uživatel:");
-                let resp = ui.text_edit_singleline(&mut self.pending_username);
-                // Stejny vzor jako `LockScreen::focus_requested` v
-                // `app.rs` - fokus se nabidne jen pri prvnim vykresleni
-                // tohoto formulare, ne kazdy snimek znovu (jinak by to
-                // bojovalo s uzivatelovym vlastnim kliknutim treba do
-                // pole hesla).
-                if !self.credentials_focus_requested {
-                    resp.request_focus();
-                }
-                ui.end_row();
-
-                ui.label("Heslo:");
-                ui.add(egui::TextEdit::singleline(&mut self.pending_password).password(true));
-                ui.end_row();
-            });
-
-            ui.add_space(10.0);
-            if ui.add_enabled(!self.pending_username.trim().is_empty(), egui::Button::new("Připojit")).clicked() {
-                submit = true;
-            }
-        });
-
-        self.credentials_focus_requested = true;
-
-        let enter_pressed = ui.ctx().input(|i| i.key_pressed(egui::Key::Enter));
-        if (submit || enter_pressed) && !self.pending_username.trim().is_empty() {
-            self.submit_credentials();
-        }
     }
 
     /// Vykresli MobaXterm-podobny info proužek se systemovymi metrikami
@@ -727,8 +788,7 @@ impl TerminalSession {
 /// fyzickeho serveru, ke kteremu je dana session pripojena - na rozdil
 /// od `Session::name` (libovolny popisek zvoleny uzivatelem pri ulozeni
 /// spojeni) jde o to, co se skutecne pouziva k pripojeni. Pouzito v
-/// info proužku pod terminalem (`TerminalSession::render_status_bar`)
-/// i v prihlasovacim formulari (`render_credentials_prompt`).
+/// info proužku pod terminalem (`TerminalSession::render_status_bar`).
 
 fn format_host_label(session: &Session) -> String {
     if session.port == 22 {
