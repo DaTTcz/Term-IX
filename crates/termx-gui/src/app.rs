@@ -1134,29 +1134,40 @@ impl MainApp {
                             // se ukáží vedle sebe"). Home tab vyloucen
                             // stejne jako "X" nize - rozdelene zobrazeni
                             // dvou Home/Nastaveni tabu by nedavalo smysl.
-                            // "‖" (U+2016) misto napr. Unicode Dingbats/
-                            // Geometric Shapes ikon - ty se v pouzitem
-                            // pismu drive vykreslovaly jako chybejici
-                            // ctverecek (viz komentar u "X" nize).
+                            //
+                            // Vykresleny ctverecek (ne textovy znak "‖") -
+                            // stejne jako puntik "mrtveho" spojeni vyse,
+                            // resp. jak uz drive upozornila zpetna vazba
+                            // "ikona pro tab dual - vypada jako prazdny
+                            // ctverecek misto ikonky": pouzity znak "‖"
+                            // (U+2016) v tomto pismu nema glyf a
+                            // vykresloval se jako "tofu" (dutý ctverecek) -
+                            // proto misto spolehani na font rovnou
+                            // KRESLIME ctverecek primo (viz i komentar u
+                            // "X" tlacitka nize o stejnem druhu problemu
+                            // s Unicode Dingbats/Geometric Shapes ikonami).
+                            // Oznaceny tab ma ctverecek PLNY (zpetna
+                            // vazba "ten čtvereček plný pro vybraný tab,
+                            // ted se jen zbarví jeho okraj"), neoznaceny
+                            // jen jeho obrys.
                             if !matches!(kind, TabKind::Home) {
                                 let marked = self.split_marks.contains(&kind);
                                 let tr = i18n::t(self.settings.lang);
                                 let hover = if marked { tr.btn_split_unmark } else { tr.btn_split_mark };
-                                let text = if marked {
-                                    egui::RichText::new("‖").small().color(theme::ACCENT)
+
+                                let (rect, response) =
+                                    ui.allocate_exact_size(egui::vec2(10.0, ui.spacing().interact_size.y), egui::Sense::click());
+                                let square = egui::Rect::from_center_size(rect.center(), egui::vec2(9.0, 9.0));
+                                let rounding = egui::Rounding::same(2.0);
+                                if marked {
+                                    ui.painter().rect_filled(square, rounding, theme::ACCENT);
                                 } else {
-                                    egui::RichText::new("‖").small()
-                                };
-                                let split_clicked = ui
-                                    .scope(|ui| {
-                                        let visuals = ui.visuals_mut();
-                                        visuals.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-                                        visuals.widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
-                                        ui.add(egui::Button::new(text)).on_hover_text(hover)
-                                    })
-                                    .inner
-                                    .clicked();
-                                if split_clicked {
+                                    let outline_color =
+                                        if response.hovered() { theme::ACCENT } else { ui.visuals().text_color() };
+                                    ui.painter().rect_stroke(square, rounding, egui::Stroke::new(1.3, outline_color));
+                                }
+                                let response = response.on_hover_text(hover);
+                                if response.clicked() {
                                     self.toggle_split_mark(kind);
                                 }
                             }
