@@ -10,6 +10,11 @@ pub const BG_PANEL: Color32 = Color32::from_rgb(0x2a, 0x30, 0x38);
 pub const ACCENT: Color32 = Color32::from_rgb(0x7f, 0xe0, 0xdc);
 pub const ACCENT_DIM: Color32 = Color32::from_rgb(0x3a, 0x8f, 0x8a);
 pub const TEXT: Color32 = Color32::from_rgb(0xe8, 0xec, 0xef);
+/// Barva pro chybove/varovne stavy (napr. odpojeny SSH terminal - viz
+/// `terminal::TerminalSession::render`, obarveny tab v `tab_bar`) -
+/// stejny odstin, jaky uz drive ad-hoc pouzivala chybova hlaska v
+/// `app.rs`/`terminal.rs`, teď sjednoceny na jedno misto.
+pub const DANGER: Color32 = Color32::from_rgb(0xe0, 0x6c, 0x6c);
 
 pub fn apply(ctx: &egui::Context) {
     let mut visuals = Visuals::dark();

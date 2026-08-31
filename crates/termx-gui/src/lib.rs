@@ -19,6 +19,13 @@
 //! ktery pocita s puvodnim prevzetim stdin/stdout - viz poznamka tam) -
 //! zatim jen pro SSH, dalsi protokoly (Serial/FTP/...) budou potrebovat
 //! obdobnou specializovanou cestu, az pribudou.
+//!
+//! Uzivatelska nastaveni (`app::AppSettings` - zatim jen automaticke
+//! obnoveni ztraceneho SSH spojeni) se ukladaji pres bezny eframe
+//! perzistentni ulozny prostor (`cc.storage` predane sem do
+//! `app::TermxApp::new`) - stejny mechanismus, jaky uz drive vyuziva
+//! `persist_window` nize pro polohu/velikost okna, jen s vlastnim
+//! klicem (viz `app::SETTINGS_STORAGE_KEY`).
 
 mod app;
 mod terminal;
@@ -60,7 +67,7 @@ pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry) -> anyhow::Result<
         native_options,
         Box::new(move |cc| {
             theme::apply(&cc.egui_ctx);
-            Ok(Box::new(app::TermxApp::new(vault_path, registry)))
+            Ok(Box::new(app::TermxApp::new(vault_path, registry, cc.storage)))
         }),
     )
     .map_err(|e| anyhow::anyhow!("nepodarilo se spustit graficke rozhrani: {e}"))

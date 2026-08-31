@@ -20,6 +20,10 @@ termx-ssh = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+# (De)serializace `AppSettings` (viz `app.rs`) do beznho eframe
+# perzistentniho ulozneho prostoru (cargo feature "persistence" u
+# `eframe` nize, uz drive vyuzivana pro `persist_window`).
+serde = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }

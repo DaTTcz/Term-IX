@@ -41,6 +41,10 @@
 //!      `egui` byla nahrazena konstantou `Frame::NONE`), staci upravit
 //!      jen toto jedno volani; zbytek proužku (skladani `parts` do
 //!      textu) na tom nezavisi.
+//! Rucni/automaticke znovupripojeni (`reconnect`/`maybe_auto_reconnect`,
+//! viz nize) zadne nove nejiste API nepridava - jen znovu vola uz
+//! overene `spawn_ssh_session`/`Term::new` se stejnymi parametry jako
+//! `TerminalSession::new`.
 //! Architektura kolem (SSH vlakno v `termx-ssh`, kanaly, GUI tab) na
 //! techto detailech nezavisi - jde o lokalizovanou opravu jednoho
 //! souboru.
@@ -99,6 +103,12 @@ const FONT_SIZE: f32 = 14.0;
 /// podle uzivatelovy zpetne vazby.
 const STATUS_BAR_FONT_SIZE: f32 = 14.0;
 
+/// Nejmensi rozestup mezi dvema po sobe jdoucimi POKUSY o automaticke
+/// obnoveni spojeni (viz `TerminalSession::maybe_auto_reconnect`) - aby
+/// se pri dlouhodobe nedostupnem serveru nezkousel novy pokus uplne
+/// kazdy snimek (desitky za sekundu), ale v rozumnych intervalech.
+const AUTO_RECONNECT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
 fn terminal_font() -> egui::FontId {
     egui::FontId::monospace(FONT_SIZE)
 }
@@ -135,6 +145,21 @@ impl EventListener for EventProxy {
     fn send_event(&self, _event: Event) {}
 }
 
+/// Stav SSH spojeni tohoto terminalu (viz `TerminalSession::state`) -
+/// pouziva se jak pro vykresleni obsahu tabu (`render`), tak z
+/// `app.rs` (`tab_bar`) pro obarveni "mrtveho" tabu a pro rozhodnuti,
+/// jestli je pri jeho zavirani potreba potvrzeni.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnState {
+    /// Prvni navazovani spojeni, nebo prubeh automatickeho/rucniho
+    /// pokusu o jeho obnoveni (viz `reconnect`).
+    Connecting,
+    Connected,
+    /// Spojeni skoncilo - at uz chybou (`error` je pak `Some`), nebo
+    /// cistě (napr. `exit`/`logout` na druhe strane).
+    Disconnected,
+}
+
 /// Jedno bezici SSH spojeni napojene na vestaveny terminal - jeden
 /// otevreny Connection tab = jedna instance (viz `MainApp::terminal_sessions`
 /// v `app.rs`).
@@ -143,6 +168,11 @@ pub struct TerminalSession {
     parser: Processor,
     handle: SshHandle,
     connected: bool,
+    /// `true` od okamziku, kdy poprve dorazilo `SshEvent::Connected` -
+    /// odlisuje "jeste vubec nikdy nepripojeno" (stav `Connecting`) od
+    /// "bylo pripojeno, ale spojeni spadlo" (stav `Disconnected`), viz
+    /// `state`. Resetuje se zpet na `false` pri kazdem `reconnect`.
+    ever_connected: bool,
     error: Option<String>,
     /// Aktualni velikost mrizky ve znacich - drzena zvlast (mimo
     /// `self.term`), aby `resize_to_fit` mohla levne kazdy snimek
@@ -152,19 +182,15 @@ pub struct TerminalSession {
     /// snimku nezmenila).
     cols: usize,
     rows: usize,
-    /// Identifikator teto SSH relace (`Session::id`) - pouzity jen jako
-    /// stabilni a napric relacemi jednoznacny `egui::Id` pro info
-    /// proužek (`render_status_bar`), aby se pripadne shody v
-    /// `host_label` (dve relace na stejny hostname/IP) nemohly poplest.
-    session_id: uuid::Uuid,
-    /// Adresa (hostname/IP), pripadne i port (kdyz neni vychozich 22),
-    /// fyzickeho serveru, ke kteremu je toto spojeni pripojeno - na
-    /// rozdil od `Session::name` (libovolny popisek zvoleny uzivatelem
-    /// pri ulozeni spojeni) jde o to, co se skutecne pouziva k
-    /// pripojeni. Zobrazuje se v info proužku pod terminalem
-    /// (`render_status_bar`), aby bylo na prvni pohled jasne, ke
-    /// kteremu fyzickemu serveru statistiky patri.
-    host_label: String,
+    /// Puvodni ulozena/docasna session, ze ktere toto spojeni vzniklo -
+    /// drzena cela (ne jen id/host), aby ji `reconnect` mohl znovu
+    /// pouzit pro `spawn_ssh_session` bez nutnosti ji odjinud znovu
+    /// hledat (Connection tab uz zadnou referenci na `MainApp` nema).
+    session: Session,
+    /// Kdy naposledy probehl pokus o (automaticke) obnoveni spojeni -
+    /// viz `maybe_auto_reconnect`/`AUTO_RECONNECT_INTERVAL`. `None`,
+    /// dokud jeste zadny pokus o obnoveni neproběhl.
+    last_reconnect_attempt: Option<std::time::Instant>,
     /// Posledni prijate systemove metriky (viz `termx_ssh::SystemStats`) -
     /// `None`, dokud po pripojeni jeste nedorazilo prvni periodicke
     /// obcerstveni (viz `SshEvent::Stats` v `pump`); do te doby se info
@@ -180,23 +206,70 @@ impl TerminalSession {
         let size = TermSize { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
         let term = Term::new(TermConfig::default(), &size, EventProxy);
         let handle = spawn_ssh_session(session.clone(), DEFAULT_COLS as u16, DEFAULT_ROWS as u16);
-        let host_label = if session.port == 22 {
-            session.host.clone()
-        } else {
-            format!("{}:{}", session.host, session.port)
-        };
 
         Self {
             term,
             parser: Processor::new(),
             handle,
             connected: false,
+            ever_connected: false,
             error: None,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
-            session_id: session.id,
-            host_label,
+            session: session.clone(),
+            last_reconnect_attempt: None,
             stats: None,
+        }
+    }
+
+    /// Odvozeny stav spojeni (viz [`ConnState`]) z `connected`/
+    /// `ever_connected`/`error`.
+    pub fn state(&self) -> ConnState {
+        if self.connected {
+            ConnState::Connected
+        } else if self.ever_connected || self.error.is_some() {
+            ConnState::Disconnected
+        } else {
+            ConnState::Connecting
+        }
+    }
+
+    /// Zahodi aktualni SSH spojeni (pokud jeste bezi - zahozenim
+    /// `self.handle` se stejne jako pri zavreni tabu, viz
+    /// `MainApp::close_tab`, cistě ukonci i prislusne pozadi bezici SSH
+    /// vlakno) a zalozi nove, se stejnymi udaji a stejnou velikosti
+    /// mrizky. Pouzito jak pro rucni tlacitko "Připojit znovu" v
+    /// odpojenem tabu (`render`), tak pro automaticke obnoveni
+    /// (`maybe_auto_reconnect`). Obsah obrazovky (`self.term`) se
+    /// resetuje - predchozi vystup (napr. "logout" z minule relace) by
+    /// po znovupripojeni uz nedaval smysl.
+    fn reconnect(&mut self) {
+        let size = TermSize { cols: self.cols, rows: self.rows };
+        self.term = Term::new(TermConfig::default(), &size, EventProxy);
+        self.parser = Processor::new();
+        self.handle = spawn_ssh_session(self.session.clone(), self.cols as u16, self.rows as u16);
+        self.connected = false;
+        self.ever_connected = false;
+        self.error = None;
+        self.stats = None;
+        self.last_reconnect_attempt = Some(std::time::Instant::now());
+    }
+
+    /// Kdyz je automaticke obnoveni v Nastaveni zapnute (`enabled`),
+    /// zkusi (nejvyse jednou za [`AUTO_RECONNECT_INTERVAL`]) spojeni
+    /// samo obnovit. Volano jen kdyz uz je stav [`ConnState::Disconnected`]
+    /// (viz `render`) - dokud prvni pripojovaci pokus jeste bezi
+    /// (`ConnState::Connecting`), zadny dalsi netreba spoustet.
+    fn maybe_auto_reconnect(&mut self, enabled: bool) {
+        if !enabled {
+            return;
+        }
+        let ready = match self.last_reconnect_attempt {
+            None => true,
+            Some(last) => last.elapsed() >= AUTO_RECONNECT_INTERVAL,
+        };
+        if ready {
+            self.reconnect();
         }
     }
 
@@ -251,6 +324,7 @@ impl TerminalSession {
                 }
                 Ok(SshEvent::Connected) => {
                     self.connected = true;
+                    self.ever_connected = true;
                     self.error = None;
                 }
                 Ok(SshEvent::Error(e)) => {
@@ -302,21 +376,48 @@ impl TerminalSession {
 
     /// Vykresli aktualni stav terminalu do daneho `Ui` (cely obsah
     /// Connection tabu) a zpracuje klavesovy vstup z tohoto snimku.
-    pub fn render(&mut self, ui: &mut egui::Ui) {
+    /// `auto_reconnect` je aktualni hodnota nastaveni "automaticky se
+    /// pokoušet obnovit ztracené spojení" (viz `MainApp::settings` v
+    /// `app.rs`) - samotny `TerminalSession` si zadne globalni
+    /// nastaveni nedrzi, dostava ho pri kazdem vykresleni zvenci.
+    pub fn render(&mut self, ui: &mut egui::Ui, auto_reconnect: bool) {
         self.pump();
         self.handle_keyboard(ui);
 
         // Dokud je tab otevreny/aktivni, chceme obrazovku prubezne
         // obcerstvovat i bez interakce uzivatele (aby se novy vystup ze
-        // serveru objevil hned, ne az pri dalsim kliknuti/klavese).
+        // serveru objevil hned, ne az pri dalsim kliknuti/klavese, a aby
+        // fungoval i casovac automatickeho obnoveni spojeni nize).
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
 
-        if let Some(err) = &self.error {
-            ui.colored_label(egui::Color32::from_rgb(0xe0, 0x6c, 0x6c), format!("Spojení skončilo chybou: {err}"));
-            ui.add_space(6.0);
-        } else if !self.connected {
-            ui.label(egui::RichText::new("Připojuji…").small());
-            ui.add_space(6.0);
+        match self.state() {
+            ConnState::Disconnected => {
+                // Kdyz je automaticke obnoveni zapnute, zkusi se samo -
+                // tlacitko "Připojit znovu" nize zustava funkcni i tak
+                // (okamzity rucni pokus, bez cekani na dalsi casovy
+                // interval).
+                self.maybe_auto_reconnect(auto_reconnect);
+
+                ui.horizontal(|ui| {
+                    let message = match &self.error {
+                        Some(err) => format!("Spojení skončilo chybou: {err}"),
+                        None => "Spojení bylo ukončeno.".to_string(),
+                    };
+                    ui.colored_label(theme::DANGER, message);
+                    if ui.button("🔄 Připojit znovu").clicked() {
+                        self.reconnect();
+                    }
+                    if auto_reconnect {
+                        ui.label(egui::RichText::new("(automaticky se zkouší obnovit)").small().weak());
+                    }
+                });
+                ui.add_space(6.0);
+            }
+            ConnState::Connecting => {
+                ui.label(egui::RichText::new("Připojuji…").small());
+                ui.add_space(6.0);
+            }
+            ConnState::Connected => {}
         }
 
         // Info proužek se systemovymi metrikami se pripne dolu JESTE
@@ -352,7 +453,7 @@ impl TerminalSession {
         // texty (`&'static str`), zadna dalsi lokalizace/formatovani u
         // nich neni potreba.
         let mut items: Vec<(String, &'static str)> = vec![(
-            format!("🔌 {}", self.host_label),
+            format!("🔌 {}", format_host_label(&self.session)),
             "Adresa (hostname/IP) fyzického serveru, ke kterému je toto spojení připojeno.",
         )];
 
@@ -401,7 +502,7 @@ impl TerminalSession {
             items.push((format!("💾 /: {disk}%"), "Zaplnění kořenového disku (/) na serveru."));
         }
 
-        egui::TopBottomPanel::bottom(egui::Id::new(("term_status_bar", self.session_id)))
+        egui::TopBottomPanel::bottom(egui::Id::new(("term_status_bar", self.session.id)))
             .frame(
                 egui::Frame::none()
                     .fill(theme::BG_PANEL)
@@ -472,6 +573,19 @@ impl TerminalSession {
         }
 
         job
+    }
+}
+
+/// Adresa (hostname/IP), pripadne i port (kdyz neni vychozich 22),
+/// fyzickeho serveru, ke kteremu je dana session pripojena - na rozdil
+/// od `Session::name` (libovolny popisek zvoleny uzivatelem pri ulozeni
+/// spojeni) jde o to, co se skutecne pouziva k pripojeni. Pouzito v
+/// info proužku pod terminalem (`TerminalSession::render_status_bar`).
+fn format_host_label(session: &Session) -> String {
+    if session.port == 22 {
+        session.host.clone()
+    } else {
+        format!("{}:{}", session.host, session.port)
     }
 }
 

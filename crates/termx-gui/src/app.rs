@@ -20,6 +20,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
 use termx_core::{AuthMethod, ModuleRegistry, Protocol, Session};
 use termx_update::LatestRelease;
 use termx_vault::{Vault, VaultData};
@@ -27,6 +28,31 @@ use uuid::Uuid;
 
 use crate::terminal;
 use crate::theme;
+
+/// Uzivatelska nastaveni aplikace (na rozdil od obsahu trezoru) - zatim
+/// jen chovani pri ztrate SSH spojeni (viz `MainApp::render_settings`,
+/// `terminal::TerminalSession::render`). Uklada se přes běžný eframe
+/// perzistentní úložný prostor ("persistence" cargo feature u `eframe`,
+/// uz drive vyuzivana pro `persist_window` v `lib.rs`) - obycejny
+/// NEsifrovany soubor mimo trezor (zadne citlive udaje se sem
+/// neukladaji), takze preziva restart aplikace i pro hostovsky rezim
+/// (na rozdil od `vault`). Viz `TermxApp::new`/`TermxApp::save`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSettings {
+    /// Kdyz `true`, po ztrate SSH spojeni se aplikace sama periodicky
+    /// pokousi pripojit znovu (viz `terminal::TerminalSession::maybe_auto_reconnect`).
+    /// Kdyz `false` (vychozi), spojeni zustane prerusene a jen se
+    /// obarvi prislusny tab (viz `tab_bar`) - obnovit jde pak jen rucne
+    /// tlacitkem primo v tabu terminalu.
+    #[serde(default)]
+    pub auto_reconnect: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self { auto_reconnect: false }
+    }
+}
 
 /// Stejne logo jako u ikony aplikace (`lib.rs`) - zvlast nacteno i zde,
 /// aby ho slo vykreslit jako obrazek primo v Home tabu (`render_home`),
@@ -124,6 +150,15 @@ struct MoveDialog {
 enum DeleteTarget {
     Session(Uuid),
     Folder(String),
+}
+
+/// Rozpracovany stav potvrzovaciho dialogu pro zavreni tabu s AKTIVNIM
+/// (pripojenym) SSH spojenim - viz `tab_bar`/`show_close_tab_confirm`.
+/// U tabu bez ziveho spojeni (Home/Nastaveni, nebo Connection tab, ktery
+/// uz je odpojeny/se jeste teprve pripojuje) se zavira rovnou bez ptani.
+struct CloseTabConfirm {
+    idx: usize,
+    title: String,
 }
 
 #[derive(Default)]
@@ -442,6 +477,13 @@ struct MainApp {
     quick_connect_form: Option<QuickConnectForm>,
     export_dialog: Option<ExportDialog>,
     import_dialog: Option<ImportDialog>,
+    /// Potvrzeni zavreni tabu s aktivnim SSH spojenim - viz
+    /// [`CloseTabConfirm`].
+    close_tab_confirm: Option<CloseTabConfirm>,
+
+    /// Uzivatelska nastaveni (viz [`AppSettings`]) - nacte se pri startu
+    /// v `TermxApp::new` a preda sem, uklada se zpet v `TermxApp::save`.
+    settings: AppSettings,
 
     /// Logo pro Home tab - nacte a nakesuje se jako GPU textura az pri
     /// prvnim vykresleni (`MainApp::logo_texture`), ne uz pri startu
@@ -459,7 +501,7 @@ struct MainApp {
 }
 
 impl MainApp {
-    fn new(vault: Vault, master_password: String, registry: ModuleRegistry) -> Self {
+    fn new(vault: Vault, master_password: String, registry: ModuleRegistry, settings: AppSettings) -> Self {
         Self {
             vault,
             master_password,
@@ -478,6 +520,8 @@ impl MainApp {
             quick_connect_form: None,
             export_dialog: None,
             import_dialog: None,
+            close_tab_confirm: None,
+            settings,
             logo_texture: None,
             update_check: UpdateCheck::NotStarted,
             update_rx: None,
@@ -491,7 +535,7 @@ impl MainApp {
     /// schovane; jedina dostupna cesta k pripojeni je "rychle spojeni"
     /// (`quick_connect_form`/`ad_hoc_sessions`), ktere si uzivatel musi
     /// zadat pri kazdem spusteni znovu.
-    fn new_guest(registry: ModuleRegistry) -> Self {
+    fn new_guest(registry: ModuleRegistry, settings: AppSettings) -> Self {
         Self {
             vault: Vault::in_memory(),
             master_password: String::new(),
@@ -510,6 +554,8 @@ impl MainApp {
             quick_connect_form: None,
             export_dialog: None,
             import_dialog: None,
+            close_tab_confirm: None,
+            settings,
             logo_texture: None,
             update_check: UpdateCheck::NotStarted,
             update_rx: None,
@@ -538,6 +584,7 @@ impl MainApp {
         self.quick_connect_form = None;
         self.export_dialog = None;
         self.import_dialog = None;
+        self.close_tab_confirm = None;
     }
 
     /// Najde session podle id - nejdriv mezi ulozenymi servery v
@@ -602,6 +649,12 @@ impl MainApp {
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
         let mut to_select = None;
         let mut to_close = None;
+        // Kdyz uzivatel zavira tab s AKTIVNIM (pripojenym) SSH
+        // spojenim, misto rovnou zavrit se nejdriv zepta - viz
+        // `show_close_tab_confirm`. Ostatni tab (Home/Nastaveni, nebo
+        // Connection tab bez ziveho spojeni) se zavira rovnou, jako
+        // driv.
+        let mut to_confirm_close: Option<CloseTabConfirm> = None;
 
         let snapshot: Vec<TabKind> = self.tabs.clone();
 
@@ -609,12 +662,30 @@ impl MainApp {
             for (idx, &kind) in snapshot.iter().enumerate() {
                 let selected = idx == self.active_tab;
                 let title = self.tab_title(kind);
+
+                // Zbarveni "mrtveho" (odpojeneho) SSH spojeni primo v
+                // nazvu tabu, aby to bylo videt i bez jeho otevirani -
+                // viz pozadavek "TAB by měl změnit nějakou barvou ať
+                // víme že spojení je mrtvé".
+                let conn_state = match kind {
+                    TabKind::Connection(id) => self.terminal_sessions.get(&id).map(|s| s.state()),
+                    _ => None,
+                };
+                let mut label = egui::RichText::new(title.clone());
+                if conn_state == Some(terminal::ConnState::Disconnected) {
+                    label = label.color(theme::DANGER);
+                }
+
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(selected, title).clicked() {
+                    if ui.selectable_label(selected, label).clicked() {
                         to_select = Some(idx);
                     }
                     if !matches!(kind, TabKind::Home) && ui.small_button("✕").clicked() {
-                        to_close = Some(idx);
+                        if conn_state == Some(terminal::ConnState::Connected) {
+                            to_confirm_close = Some(CloseTabConfirm { idx, title });
+                        } else {
+                            to_close = Some(idx);
+                        }
                     }
                 });
             }
@@ -623,7 +694,9 @@ impl MainApp {
         if let Some(idx) = to_select {
             self.active_tab = idx;
         }
-        if let Some(idx) = to_close {
+        if let Some(confirm) = to_confirm_close {
+            self.close_tab_confirm = Some(confirm);
+        } else if let Some(idx) = to_close {
             self.close_tab(idx);
         }
     }
@@ -796,6 +869,23 @@ impl MainApp {
             "Vzhled: v této verzi je k dispozici jen 'terminálové' tmavé téma. \
              Modernější téma přibude jako další volba zde.",
         );
+
+        ui.add_space(18.0);
+        ui.separator();
+        ui.add_space(12.0);
+        ui.heading("Ztráta SSH spojení");
+        ui.add_space(4.0);
+        ui.checkbox(&mut self.settings.auto_reconnect, "Automaticky se pokoušet obnovit ztracené spojení");
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(
+                "Když je vypnuto (výchozí), spojení po odpojení zůstane přerušené a příslušný \
+                 tab se jen zbarví, aby bylo na první pohled vidět, že je mrtvé - obnovit ho pak \
+                 jde ručně tlačítkem přímo v tabu terminálu. Když je zapnuto, aplikace se navíc \
+                 sama periodicky pokouší spojení obnovit.",
+            )
+            .small(),
+        );
     }
 
     fn render_connection(&mut self, ui: &mut egui::Ui, id: Uuid) {
@@ -829,7 +919,7 @@ impl MainApp {
         self.terminal_sessions.entry(id).or_insert_with(|| terminal::TerminalSession::new(&session));
 
         if let Some(term_session) = self.terminal_sessions.get_mut(&id) {
-            term_session.render(ui);
+            term_session.render(ui, self.settings.auto_reconnect);
         }
     }
 
@@ -1136,6 +1226,40 @@ impl MainApp {
             self.save_vault();
         } else if open {
             self.delete_confirm = Some(target);
+        }
+    }
+
+    /// Potvrzeni pred zavrenim tabu s AKTIVNIM (pripojenym) SSH
+    /// spojenim - viz `tab_bar` (kde se `close_tab_confirm` nastavuje) a
+    /// pozadavek "když ho dám vypnout tak mě poprosí o potvrzení zda ho
+    /// chci opravdu vypnout". Stejny vzor jako `show_delete_confirm`
+    /// vyse.
+    fn show_close_tab_confirm(&mut self, ctx: &egui::Context) {
+        let Some(confirm) = self.close_tab_confirm.take() else { return };
+        let mut open = true;
+        let mut confirmed = false;
+        let mut cancel = false;
+
+        centered_dialog(egui::Window::new("Zavřít spojení"), ctx).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+            ui.label(format!("Spojení „{}“ je právě aktivní. Opravdu chcete tab zavřít a spojení ukončit?", confirm.title));
+            ui.horizontal(|ui| {
+                if ui.button("Zavřít").clicked() {
+                    confirmed = true;
+                }
+                if ui.button("Zrušit").clicked() {
+                    cancel = true;
+                }
+            });
+        });
+
+        if cancel {
+            open = false;
+        }
+
+        if confirmed {
+            self.close_tab(confirm.idx);
+        } else if open {
+            self.close_tab_confirm = Some(confirm);
         }
     }
 
@@ -1761,6 +1885,7 @@ impl MainApp {
         self.show_quick_connect_dialog(ctx);
         self.show_export_dialog(ctx);
         self.show_import_dialog(ctx);
+        self.show_close_tab_confirm(ctx);
 
         egui::SidePanel::left("session_tree")
             .resizable(true)
@@ -1821,6 +1946,12 @@ enum LockState {
 /// `main.rs` pres cmd konzoli (`rpassword`), okno aplikace se otevre
 /// rovnou a hlavni heslo se zadava zde - v jednoduche uvodni obrazovce
 /// uvnitr okna samotneho, bez zadneho konzoloveho okna navic.
+/// Klic pod kterym se [`AppSettings`] uklada do bezneho eframe
+/// perzistentniho ulozneho prostoru (viz `TermxApp::new`/`TermxApp::save`) -
+/// samostatny od `eframe::APP_KEY` (ten by ocekaval serializaci cele
+/// `TermxApp`, coz nechceme - `Vault`/hesla v pameti tam nepatri).
+const SETTINGS_STORAGE_KEY: &str = "term-ix-settings";
+
 pub struct TermxApp {
     vault_path: PathBuf,
     /// Registr modulu ceka zde, dokud se trezor neodemkne/nevytvori -
@@ -1829,14 +1960,25 @@ pub struct TermxApp {
     /// nema).
     registry: Option<ModuleRegistry>,
     state: LockState,
+    /// Nastaveni nactene pri startu (viz `new`) - drzi se tu jako
+    /// zaloha pro `save`, kdyby eframe ulozilo stav jeste pred prvnim
+    /// odemcenim (kdy [`MainApp`], ktery jinak drzi "zivou" kopii,
+    /// jeste neexistuje).
+    initial_settings: AppSettings,
 }
 
 impl TermxApp {
-    pub fn new(vault_path: PathBuf, registry: ModuleRegistry) -> Self {
+    /// `storage` je `cc.storage` z uzavření `eframe::run_native` v
+    /// `lib.rs` - odtud se (pokud existuje) hned pri startu nactou drive
+    /// ulozena nastaveni (viz [`AppSettings`]); kdyz zadna jeste
+    /// neexistuji (prvni spusteni), pouzije se `AppSettings::default()`.
+    pub fn new(vault_path: PathBuf, registry: ModuleRegistry, storage: Option<&dyn eframe::Storage>) -> Self {
+        let initial_settings = storage.and_then(|s| eframe::get_value(s, SETTINGS_STORAGE_KEY)).unwrap_or_default();
         Self {
             vault_path,
             registry: Some(registry),
             state: LockState::Locked(LockScreen::default()),
+            initial_settings,
         }
     }
 
@@ -1944,7 +2086,7 @@ impl TermxApp {
 
         if skip {
             let registry = self.registry.take().expect("registry byl jiz spotrebovan");
-            self.state = LockState::Unlocked(MainApp::new_guest(registry));
+            self.state = LockState::Unlocked(MainApp::new_guest(registry, self.initial_settings.clone()));
             return;
         }
 
@@ -1965,7 +2107,7 @@ impl TermxApp {
         match outcome {
             Ok(vault) => {
                 let registry = self.registry.take().expect("registry byl jiz spotrebovan");
-                self.state = LockState::Unlocked(MainApp::new(vault, password, registry));
+                self.state = LockState::Unlocked(MainApp::new(vault, password, registry, self.initial_settings.clone()));
             }
             Err(e) => {
                 let LockState::Locked(screen) = &mut self.state else { return };
@@ -1987,5 +2129,20 @@ impl eframe::App for TermxApp {
         } else if let LockState::Unlocked(app) = &mut self.state {
             app.update(ctx, frame);
         }
+    }
+
+    /// Eframe tuto metodu vola periodicky na pozadi a pri zavirani okna
+    /// (stejny mechanismus jako `persist_window` v `lib.rs` uz drive
+    /// vyuziva pro polohu/velikost okna) - ulozi [`AppSettings`], aby je
+    /// `new` mohlo pri pristim spusteni zase nacist. Pokud uz je trezor
+    /// odemceny, uklada se "ziva" kopie primo z [`MainApp`] (tam uzivatel
+    /// hodnoty meni - viz `render_settings`); jinak (jeste na zamcene
+    /// obrazovce) se uklada `initial_settings` beze zmeny.
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let settings = match &self.state {
+            LockState::Unlocked(app) => &app.settings,
+            LockState::Locked(_) => &self.initial_settings,
+        };
+        eframe::set_value(storage, SETTINGS_STORAGE_KEY, settings);
     }
 }
