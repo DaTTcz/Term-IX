@@ -401,7 +401,7 @@ async fn run_session(
     // uzivatele vyplneneho uz pri zalozeni), dalsi kola uz vzdy cekaji
     // na `SshInput::Credentials`.
     let mut creds = early_auth;
-    let (username, password) = loop {
+    let (username, _password) = loop {
         let (username, password) = match creds.take() {
             Some(c) => c,
             None => {
