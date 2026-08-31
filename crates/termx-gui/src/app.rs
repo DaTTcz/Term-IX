@@ -26,6 +26,12 @@
 //! prave na nich, jde o izolovanou opravu jen techto par mist, zbytek
 //! ukladani nastaveni (`eframe::get_value`/`set_value`) na tom
 //! nezavisi.
+//!
+//! Prihlaseni z hostovskeho rezimu bez restartu (`render_guest_login`/
+//! `submit_guest_login`) zadne nove API nepridava - pouziva stejne
+//! `Vault::unlock`/`Vault::create` volani jako `TermxApp::render_lock_screen`,
+//! jen vysledek zapise primo do jiz bezici `MainApp` instance misto
+//! zalozeni nove.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -184,6 +190,26 @@ impl Default for HomeConnectForm {
             save: true,
         }
     }
+}
+
+/// Prihlasovaci formular zobrazeny v levem panelu MISTO stromu
+/// ulozenych serveru, kdyz je aplikace v hostovskem rezimu (viz
+/// `MainApp::render_guest_login`, volane ze `show_tree`) - zpetna
+/// vazba "v hostovském režimu bychom mohli mít možnost se přihlásit...
+/// okénko pro přihlášení v místě kde se ukazuje sloup uložených
+/// serverů." Stejne udaje/logika jako na uvodni zamcene obrazovce
+/// (`LockScreen`/`TermxApp::render_lock_screen`) - `confirm` se
+/// pouziva jen kdyz trezor jeste vubec neexistuje (nastaveni noveho
+/// hlavniho hesla misto prihlaseni k existujicimu).
+#[derive(Default)]
+struct GuestLoginForm {
+    password: String,
+    confirm: String,
+    error: Option<String>,
+    /// Stejny ucel jako `LockScreen::focus_requested` - pole hesla se
+    /// ma fokusnout jen jednou (prvni snimek po vstupu do hostovskeho
+    /// rezimu, nebo znovu po chybe), ne kazdy snimek.
+    focus_requested: bool,
 }
 
 enum RenameTarget {
@@ -495,6 +521,12 @@ fn centered_dialog<'o>(window: egui::Window<'o>, ctx: &egui::Context) -> egui::W
 /// vypadal puvodni `TermxApp` pred pridanim zamcene obrazovky.
 struct MainApp {
     vault: Vault,
+    /// Cesta k souboru trezoru na disku - stejna hodnota, jakou zna
+    /// `TermxApp::vault_path`, jen predana sem, aby ji mel k dispozici i
+    /// hostovsky rezim (`self.vault.path()` je v nem prazdna, viz
+    /// `Vault::in_memory`) pro pripadne pozdejsi prihlaseni primo z
+    /// bezicí aplikace - viz `render_guest_login`.
+    vault_path: PathBuf,
     master_password: String,
     #[allow(dead_code)] // navazujici krok: napojeni Connection tabu na skutecny modul
     registry: ModuleRegistry,
@@ -541,6 +573,8 @@ struct MainApp {
     /// nepouzije (`submit_home_connect`, ktera ho zase vrati na
     /// vychozi hodnotu) nebo se z Home tabu neodejde.
     home_connect_form: HomeConnectForm,
+    /// Prihlasovaci formular pro hostovsky rezim, viz [`GuestLoginForm`].
+    guest_login: GuestLoginForm,
 
     /// Uzivatelska nastaveni (viz [`AppSettings`]) - nacte se pri startu
     /// v `TermxApp::new` a preda sem, uklada se zpet v `TermxApp::save`.
@@ -562,9 +596,10 @@ struct MainApp {
 }
 
 impl MainApp {
-    fn new(vault: Vault, master_password: String, registry: ModuleRegistry, settings: AppSettings) -> Self {
+    fn new(vault: Vault, vault_path: PathBuf, master_password: String, registry: ModuleRegistry, settings: AppSettings) -> Self {
         Self {
             vault,
+            vault_path,
             master_password,
             registry,
             is_guest: false,
@@ -583,6 +618,7 @@ impl MainApp {
             import_dialog: None,
             close_tab_confirm: None,
             home_connect_form: HomeConnectForm::default(),
+            guest_login: GuestLoginForm::default(),
             settings,
             logo_texture: None,
             update_check: UpdateCheck::NotStarted,
@@ -594,12 +630,15 @@ impl MainApp {
     /// "Hostovsky" rezim - uzivatel na uvodni obrazovce nezadal hlavni
     /// heslo. Zadny trezor se necte ani nezapisuje (`Vault::in_memory`),
     /// takze strom je prazdny a pridavani/mazani serveru je v UI
-    /// schovane; jedina dostupna cesta k pripojeni je "rychle spojeni"
-    /// (`quick_connect_form`/`ad_hoc_sessions`), ktere si uzivatel musi
-    /// zadat pri kazdem spusteni znovu.
-    fn new_guest(registry: ModuleRegistry, settings: AppSettings) -> Self {
+    /// schovane; k pripojeni jde pouzit "rychle spojeni"
+    /// (`ad_hoc_sessions`), nebo se lze kdykoliv i dodatecne prihlasit k
+    /// existujicimu/vytvorit novy trezor primo v levem panelu (viz
+    /// `render_guest_login`) - `vault_path` je proto potreba znat i tady,
+    /// i kdyz `self.vault` je do te doby jen `Vault::in_memory`.
+    fn new_guest(vault_path: PathBuf, registry: ModuleRegistry, settings: AppSettings) -> Self {
         Self {
             vault: Vault::in_memory(),
+            vault_path,
             master_password: String::new(),
             registry,
             is_guest: true,
@@ -623,6 +662,7 @@ impl MainApp {
             // matouci; checkbox se navic v `render_home` u hosta vubec
             // nezobrazuje.
             home_connect_form: HomeConnectForm { save: false, ..HomeConnectForm::default() },
+            guest_login: GuestLoginForm::default(),
             settings,
             logo_texture: None,
             update_check: UpdateCheck::NotStarted,
@@ -1972,11 +2012,7 @@ impl MainApp {
 
     fn show_tree(&mut self, ui: &mut egui::Ui) {
         if self.is_guest {
-            ui.label(
-                egui::RichText::new("Hostovský režim - uložené servery nejsou vidět. Přihlaste se (restart aplikace) pro přístup k trezoru.")
-                    .small(),
-            );
-            ui.separator();
+            self.render_guest_login(ui);
             return;
         }
 
@@ -1996,6 +2032,105 @@ impl MainApp {
         egui::ScrollArea::vertical().show(ui, |ui| {
             self.render_folder_contents(ui, &tree, "");
         });
+    }
+
+    /// Prihlasovaci formular zobrazeny v levem panelu misto stromu
+    /// serveru, dokud je aplikace v hostovskem rezimu - viz
+    /// [`GuestLoginForm`]. Na rozdil od puvodni hlasky uz neni potreba
+    /// aplikaci restartovat, viz `submit_guest_login`.
+    fn render_guest_login(&mut self, ui: &mut egui::Ui) {
+        let vault_exists = self.vault_path.exists();
+
+        ui.label(egui::RichText::new("Hostovský režim").strong());
+        ui.label(egui::RichText::new("Uložené servery nejsou vidět.").small());
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(10.0);
+
+        ui.label(if vault_exists { "Přihlásit se k trezoru:" } else { "Trezor ještě neexistuje - nastavte heslo:" });
+        ui.add_space(4.0);
+
+        let pw_resp = ui.add(
+            egui::TextEdit::singleline(&mut self.guest_login.password)
+                .password(true)
+                .hint_text("Hlavní heslo")
+                .desired_width(f32::INFINITY),
+        );
+        // Stejny vzor jako `LockScreen::focus_requested` - fokus se
+        // nabidne jen jednou (prvni snimek po vstupu do hostovskeho
+        // rezimu, nebo znovu po chybe nize), ne kazdy snimek.
+        if !self.guest_login.focus_requested {
+            pw_resp.request_focus();
+        }
+        let enter_in_password = pw_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+        let mut enter_in_confirm = false;
+        if !vault_exists {
+            ui.add_space(4.0);
+            let confirm_resp = ui.add(
+                egui::TextEdit::singleline(&mut self.guest_login.confirm)
+                    .password(true)
+                    .hint_text("Zopakujte heslo")
+                    .desired_width(f32::INFINITY),
+            );
+            enter_in_confirm = confirm_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        }
+
+        self.guest_login.focus_requested = true;
+
+        ui.add_space(6.0);
+        let clicked = ui.button(if vault_exists { "Přihlásit" } else { "Vytvořit trezor" }).clicked();
+
+        if let Some(err) = self.guest_login.error.clone() {
+            ui.add_space(6.0);
+            ui.colored_label(theme::DANGER, err);
+        }
+
+        if !vault_exists {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("Pozor: při zapomenutí tohoto hesla se k uloženým údajům už nikdo nedostane.").small(),
+            );
+        }
+
+        if clicked || enter_in_password || enter_in_confirm {
+            self.submit_guest_login(vault_exists);
+        }
+    }
+
+    /// Zpracovani formulare z `render_guest_login` - stejna logika jako
+    /// `TermxApp::render_lock_screen` (`Vault::unlock`/`Vault::create`),
+    /// jen se pri uspechu misto zalozeni nove `MainApp` instance rovnou
+    /// prepise `self.vault`/`self.master_password`/`self.is_guest` -
+    /// diky tomu zustanou zachovany uz otevrene taby a docasna
+    /// (`ad_hoc_sessions`) spojeni, ktere uzivatel v hostovskem rezimu
+    /// pripadne uz mel rozdelane.
+    fn submit_guest_login(&mut self, vault_exists: bool) {
+        let password = std::mem::take(&mut self.guest_login.password);
+        let confirm = std::mem::take(&mut self.guest_login.confirm);
+
+        let outcome = if vault_exists {
+            Vault::unlock(&self.vault_path, &password).map_err(|e| format!("Nepodařilo se odemknout trezor: {e}"))
+        } else if password.is_empty() {
+            Err("Hlavní heslo nesmí být prázdné.".to_string())
+        } else if password != confirm {
+            Err("Zadaná hesla se neshodují.".to_string())
+        } else {
+            Vault::create(&self.vault_path, &password).map_err(|e| format!("Nepodařilo se vytvořit trezor: {e}"))
+        };
+
+        match outcome {
+            Ok(vault) => {
+                self.vault = vault;
+                self.master_password = password;
+                self.is_guest = false;
+                self.guest_login = GuestLoginForm::default();
+            }
+            Err(e) => {
+                self.guest_login.error = Some(e);
+                self.guest_login.focus_requested = false;
+            }
+        }
     }
 
     fn render_folder_contents(&mut self, ui: &mut egui::Ui, node: &FolderNode, path_prefix: &str) {
@@ -2362,7 +2497,7 @@ impl TermxApp {
 
         if skip {
             let registry = self.registry.take().expect("registry byl jiz spotrebovan");
-            self.state = LockState::Unlocked(MainApp::new_guest(registry, self.initial_settings.clone()));
+            self.state = LockState::Unlocked(MainApp::new_guest(self.vault_path.clone(), registry, self.initial_settings.clone()));
             return;
         }
 
@@ -2383,7 +2518,8 @@ impl TermxApp {
         match outcome {
             Ok(vault) => {
                 let registry = self.registry.take().expect("registry byl jiz spotrebovan");
-                self.state = LockState::Unlocked(MainApp::new(vault, password, registry, self.initial_settings.clone()));
+                self.state =
+                    LockState::Unlocked(MainApp::new(vault, self.vault_path.clone(), password, registry, self.initial_settings.clone()));
             }
             Err(e) => {
                 let LockState::Locked(screen) = &mut self.state else { return };

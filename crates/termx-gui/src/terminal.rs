@@ -48,6 +48,13 @@
 //! Architektura kolem (SSH vlakno v `termx-ssh`, kanaly, GUI tab) na
 //! techto detailech nezavisi - jde o lokalizovanou opravu jednoho
 //! souboru.
+//! Odlozene zadani prihlasovacich udaju (`ConnState::NeedsCredentials`,
+//! `handle: Option<SshHandle>`, `render_credentials_prompt`) take
+//! nepridava zadne nove nejiste API - jen posouva stejne
+//! `spawn_ssh_session` volani z `new` az za odeslani formulare
+//! (`submit_credentials`); jedina zmena rizika je, ze `handle` uz neni
+//! primo `SshHandle`, ale `Option<SshHandle>` - vsechna mista, ktera
+//! ho pouzivaji (`pump`/`send_bytes`/`resize`), s tim ted pocitaji.
 //!
 //! ZNAME OMEZENI TETO PRVNI VERZE (vedomy kompromis kvuli rozsahu):
 //! - Velikost terminalu se prizpusobuje velikosti Connection tabu
@@ -76,7 +83,7 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::{Config as TermConfig, Term};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
 
-use termx_core::Session;
+use termx_core::{AuthMethod, Session};
 use termx_ssh::{spawn_ssh_session, SshEvent, SshHandle, SshInput, SystemStats};
 
 use crate::theme;
@@ -151,6 +158,14 @@ impl EventListener for EventProxy {
 /// jestli je pri jeho zavirani potreba potvrzeni.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnState {
+    /// SSH spojeni se JESTE VUBEC NEZKOUSI navazat - ceka se, az
+    /// uzivatel primo v tomto tabu doplni uzivatele/heslo (viz
+    /// `TerminalSession::render_credentials_prompt`). Nastane jen kdyz
+    /// `Session::auth` pri zalozeni tabu nemela vyplneneho uzivatele -
+    /// typicky Home formular odeslany jen s hostem/portem, viz
+    /// zpetna vazba "měl bych mít možnost zadat uživatele a heslo až
+    /// v terminálu".
+    NeedsCredentials,
     /// Prvni navazovani spojeni, nebo prubeh automatickeho/rucniho
     /// pokusu o jeho obnoveni (viz `reconnect`).
     Connecting,
@@ -166,7 +181,12 @@ pub enum ConnState {
 pub struct TerminalSession {
     term: Term<EventProxy>,
     parser: Processor,
-    handle: SshHandle,
+    /// `None` dokud je stav `ConnState::NeedsCredentials` - zadne SSH
+    /// spojeni jeste vubec nebylo zalozeno (viz `new`/`needs_credentials`),
+    /// takze zadny handle jeste neexistuje. Vsechny metody, ktere ho
+    /// pouzivaji (`pump`, `send_bytes`, `resize`), s timto pocitaji a
+    /// v `None` pripade proste nic nedelaji.
+    handle: Option<SshHandle>,
     connected: bool,
     /// `true` od okamziku, kdy poprve dorazilo `SshEvent::Connected` -
     /// odlisuje "jeste vubec nikdy nepripojeno" (stav `Connecting`) od
@@ -196,6 +216,23 @@ pub struct TerminalSession {
     /// obcerstveni (viz `SshEvent::Stats` v `pump`); do te doby se info
     /// proužek proste nezobrazuje (viz `render_status_bar`).
     stats: Option<SystemStats>,
+    /// `true`, dokud SSH spojeni jeste vubec nebylo zalozeno, protoze
+    /// `session.auth` pri vytvoreni tabu nemela vyplneneho uzivatele -
+    /// viz [`ConnState::NeedsCredentials`]/`render_credentials_prompt`.
+    /// Po odeslani formulare (`submit_credentials`) uz zustava `false`
+    /// natrvalo (i kdyz spojeni pozdeji spadne a `reconnect` ho obnovi -
+    /// tehdy uz `session.auth` ma uzivatele/heslo vyplnene, takze se
+    /// znovu ptat netreba).
+    awaiting_credentials: bool,
+    /// Rozepsany uzivatel/heslo v `render_credentials_prompt`, nez se
+    /// odesle (viz `submit_credentials`).
+    pending_username: String,
+    pending_password: String,
+    /// Stejny ucel jako `LockScreen::focus_requested` v `app.rs` - pole
+    /// uzivatele v `render_credentials_prompt` se ma fokusnout jen
+    /// jednou (prvni snimek), ne kazdy snimek znovu (to by bojovalo s
+    /// uzivatelovym vlastnim kliknutim treba do pole hesla).
+    credentials_focus_requested: bool,
 }
 
 impl TerminalSession {
@@ -205,7 +242,15 @@ impl TerminalSession {
     pub fn new(session: &Session) -> Self {
         let size = TermSize { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
         let term = Term::new(TermConfig::default(), &size, EventProxy);
-        let handle = spawn_ssh_session(session.clone(), DEFAULT_COLS as u16, DEFAULT_ROWS as u16);
+
+        // Kdyz session (typicky z Home formulare, viz
+        // `app.rs::submit_home_connect`) nema vyplneneho uzivatele, SSH
+        // spojeni se JESTE NEZAKLADA - misto toho tab zustane ve stavu
+        // `ConnState::NeedsCredentials`, dokud je uzivatel nedopise
+        // primo tady (viz `render_credentials_prompt`/`submit_credentials`).
+        let awaiting_credentials = needs_credentials(&session.auth);
+        let handle =
+            if awaiting_credentials { None } else { Some(spawn_ssh_session(session.clone(), DEFAULT_COLS as u16, DEFAULT_ROWS as u16)) };
 
         Self {
             term,
@@ -219,19 +264,44 @@ impl TerminalSession {
             session: session.clone(),
             last_reconnect_attempt: None,
             stats: None,
+            awaiting_credentials,
+            pending_username: String::new(),
+            pending_password: String::new(),
+            credentials_focus_requested: false,
         }
     }
 
-    /// Odvozeny stav spojeni (viz [`ConnState`]) z `connected`/
-    /// `ever_connected`/`error`.
+    /// Odvozeny stav spojeni (viz [`ConnState`]) z `awaiting_credentials`/
+    /// `connected`/`ever_connected`/`error`.
     pub fn state(&self) -> ConnState {
-        if self.connected {
+        if self.awaiting_credentials {
+            ConnState::NeedsCredentials
+        } else if self.connected {
             ConnState::Connected
         } else if self.ever_connected || self.error.is_some() {
             ConnState::Disconnected
         } else {
             ConnState::Connecting
         }
+    }
+
+    /// Zpracuje odeslani prihlasovacich udaju z `render_credentials_prompt` -
+    /// teprve TED se poprve zaklada skutecne SSH spojeni
+    /// (`spawn_ssh_session`), s doplnenym `AuthMethod::Password` primo
+    /// do `self.session` (diky tomu i pripadny pozdejsi `reconnect` uz
+    /// zadne dalsi doplneni nepotrebuje - pouziva stejnou, uz jednou
+    /// zadanou, kombinaci uzivatel/heslo).
+    fn submit_credentials(&mut self) {
+        let username = self.pending_username.trim().to_string();
+        if username.is_empty() {
+            return;
+        }
+        self.session.auth = AuthMethod::Password { username, password: std::mem::take(&mut self.pending_password) };
+        self.awaiting_credentials = false;
+        self.handle = Some(spawn_ssh_session(self.session.clone(), self.cols as u16, self.rows as u16));
+        self.connected = false;
+        self.ever_connected = false;
+        self.error = None;
     }
 
     /// Zahodi aktualni SSH spojeni (pokud jeste bezi - zahozenim
@@ -247,7 +317,7 @@ impl TerminalSession {
         let size = TermSize { cols: self.cols, rows: self.rows };
         self.term = Term::new(TermConfig::default(), &size, EventProxy);
         self.parser = Processor::new();
-        self.handle = spawn_ssh_session(self.session.clone(), self.cols as u16, self.rows as u16);
+        self.handle = Some(spawn_ssh_session(self.session.clone(), self.cols as u16, self.rows as u16));
         self.connected = false;
         self.ever_connected = false;
         self.error = None;
@@ -284,7 +354,14 @@ impl TerminalSession {
         self.cols = cols;
         self.rows = rows;
         self.term.resize(TermSize { cols, rows });
-        let _ = self.handle.input_tx.send(SshInput::Resize { cols: cols as u32, rows: rows as u32 });
+        // Dokud `handle` jeste neni (`ConnState::NeedsCredentials`),
+        // neni komu zmenu velikosti hlasit - mrizka terminalu se sice
+        // uz prepocitava (viz `resize_to_fit`, volane i pro tento stav
+        // kvuli pripadnemu pozdejsimu prechodu do Connecting), ale
+        // zadny SSH kanal jeste neexistuje.
+        if let Some(handle) = &self.handle {
+            let _ = handle.input_tx.send(SshInput::Resize { cols: cols as u32, rows: rows as u32 });
+        }
     }
 
     /// Spocita, kolik sloupcu/radku monospace pisma se vejde do dane
@@ -315,8 +392,11 @@ impl TerminalSession {
     /// prijata data prozene pres ANSI parser, cimz se aktualizuje stav
     /// obrazovky (`self.term`).
     fn pump(&mut self) {
+        // Dokud `ConnState::NeedsCredentials` (`handle` jeste `None`) -
+        // nic k vycerpani neni, SSH spojeni jeste vubec nezacalo.
+        let Some(handle) = self.handle.as_mut() else { return };
         loop {
-            match self.handle.output_rx.try_recv() {
+            match handle.output_rx.try_recv() {
                 Ok(SshEvent::Data(bytes)) => {
                     for byte in bytes {
                         self.parser.advance(&mut self.term, byte);
@@ -347,10 +427,12 @@ impl TerminalSession {
         if bytes.is_empty() {
             return;
         }
-        // Prijemce (SSH vlakno) uz nemusi bezet (napr. spojeni mezitim
-        // skoncilo chybou) - poslani se pak proste nezdari, nic se
-        // nedeje.
-        let _ = self.handle.input_tx.send(SshInput::Data(bytes));
+        // `handle` muze byt `None` (`ConnState::NeedsCredentials`), nebo
+        // prijemce (SSH vlakno) uz nemusi bezet (napr. spojeni mezitim
+        // skoncilo chybou) - v obou pripadech se poslani proste nezdari,
+        // nic se nedeje.
+        let Some(handle) = &self.handle else { return };
+        let _ = handle.input_tx.send(SshInput::Data(bytes));
     }
 
     /// Zachyti klavesovy vstup z aktualniho snimku a preposle jej (jako
@@ -382,6 +464,18 @@ impl TerminalSession {
     /// nastaveni nedrzi, dostava ho pri kazdem vykresleni zvenci.
     pub fn render(&mut self, ui: &mut egui::Ui, auto_reconnect: bool) {
         self.pump();
+
+        if self.state() == ConnState::NeedsCredentials {
+            // Jeste vubec nezalozene SSH spojeni - misto terminalu
+            // (a bez `handle_keyboard`/`resize_to_fit`/status proužku,
+            // ktere by tu nemely co delat, kdyz zadny SSH kanal
+            // neexistuje) se zobrazi jen prihlasovaci formular. Po jeho
+            // odeslani (`submit_credentials`) uz dalsi snimek pokracuje
+            // normalne - `state()` bude `Connecting`.
+            self.render_credentials_prompt(ui);
+            return;
+        }
+
         self.handle_keyboard(ui);
 
         // Dokud je tab otevreny/aktivni, chceme obrazovku prubezne
@@ -391,6 +485,13 @@ impl TerminalSession {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
 
         match self.state() {
+            // Nedosazitelne v praxi - `NeedsCredentials` konci brzkym
+            // `return` uplne nahore v teto metode, takze se sem tok
+            // nikdy nedostane. Prazdna vetev misto `unreachable!()`
+            // zamerne - kdyby se tento predpoklad nekdy prestal drzet,
+            // je lepsi tab jen chvíli nic nevykreslit, nez shodit celou
+            // aplikaci panikou.
+            ConnState::NeedsCredentials => {}
             ConnState::Disconnected => {
                 // Kdyz je automaticke obnoveni zapnute, zkusi se samo -
                 // tlacitko "Připojit znovu" nize zustava funkcni i tak
@@ -435,6 +536,56 @@ impl TerminalSession {
         egui::ScrollArea::both().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
             ui.add(egui::Label::new(job).selectable(false));
         });
+    }
+
+    /// Inline prihlasovaci formular zobrazeny MISTO terminalu, dokud je
+    /// stav `ConnState::NeedsCredentials` (viz `render`) - kdyz uzivatel
+    /// v Home formulari (`app.rs::submit_home_connect`) vyplnil jen
+    /// hosta/port a nechal uzivatele/heslo prazdne (typicky "chci jen
+    /// dočasné spojení, nebo si nejsem jistý heslem a nechci to zkoušet
+    /// napoprvé z Home formuláře" - viz zpetna vazba "měl bych mít
+    /// možnost zadat uživatele a heslo až v terminálu"). SSH spojeni se
+    /// zalozi az po odeslani tohoto formulare (`submit_credentials`) -
+    /// lze tak klidne zkouset i vice pokusu primo tady, bez nutnosti se
+    /// vracet na Home tab a spojeni zakladat cele znovu.
+    fn render_credentials_prompt(&mut self, ui: &mut egui::Ui) {
+        let mut submit = false;
+
+        ui.vertical_centered(|ui| {
+            ui.add_space(32.0);
+            ui.label(format!("Přihlášení k {}", format_host_label(&self.session)));
+            ui.add_space(10.0);
+
+            egui::Grid::new(("term_credentials_grid", self.session.id)).num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                ui.label("Uživatel:");
+                let resp = ui.text_edit_singleline(&mut self.pending_username);
+                // Stejny vzor jako `LockScreen::focus_requested` v
+                // `app.rs` - fokus se nabidne jen pri prvnim vykresleni
+                // tohoto formulare, ne kazdy snimek znovu (jinak by to
+                // bojovalo s uzivatelovym vlastnim kliknutim treba do
+                // pole hesla).
+                if !self.credentials_focus_requested {
+                    resp.request_focus();
+                }
+                ui.end_row();
+
+                ui.label("Heslo:");
+                ui.add(egui::TextEdit::singleline(&mut self.pending_password).password(true));
+                ui.end_row();
+            });
+
+            ui.add_space(10.0);
+            if ui.add_enabled(!self.pending_username.trim().is_empty(), egui::Button::new("Připojit")).clicked() {
+                submit = true;
+            }
+        });
+
+        self.credentials_focus_requested = true;
+
+        let enter_pressed = ui.ctx().input(|i| i.key_pressed(egui::Key::Enter));
+        if (submit || enter_pressed) && !self.pending_username.trim().is_empty() {
+            self.submit_credentials();
+        }
     }
 
     /// Vykresli MobaXterm-podobny info proužek se systemovymi metrikami
@@ -581,6 +732,25 @@ impl TerminalSession {
 /// od `Session::name` (libovolny popisek zvoleny uzivatelem pri ulozeni
 /// spojeni) jde o to, co se skutecne pouziva k pripojeni. Pouzito v
 /// info proužku pod terminalem (`TerminalSession::render_status_bar`).
+/// `true`, kdyz `auth` nema vyplneneho uzivatele (a spojeni by tedy
+/// stejne rovnou selhalo se srozumitelnou, ale zbytecnou chybou) - viz
+/// [`ConnState::NeedsCredentials`]/`TerminalSession::new`. Prazdne
+/// heslo samo o sobe NEstaci - u realneho SSH je bezne heslo prazdne
+/// nechat a nechat server, at si o nej rekne (coz tady resi az
+/// `render_credentials_prompt`), ale bez uzivatele by se nemel k cemu
+/// prihlasit vubec.
+fn needs_credentials(auth: &AuthMethod) -> bool {
+    match auth {
+        AuthMethod::Password { username, .. } => username.trim().is_empty(),
+        AuthMethod::None => true,
+        // `PrivateKey`/`Agent` maji svoje vlastni "not implemented"
+        // chybove hlasky primo v `termx_ssh::run_session` - zde se nijak
+        // specialne neresi, spojeni se prubezne pokusi navazat a rovnou
+        // selze se srozumitelnou chybou (`ConnState::Disconnected`).
+        AuthMethod::PrivateKey { .. } | AuthMethod::Agent { .. } => false,
+    }
+}
+
 fn format_host_label(session: &Session) -> String {
     if session.port == 22 {
         session.host.clone()
