@@ -1601,6 +1601,11 @@ struct LockScreen {
     password: String,
     confirm: String,
     error: Option<String>,
+    /// `false` jen do prvniho vykresleni (nebo po chybe - viz nize) -
+    /// pak se pole hlavniho hesla samo fokusne, aby uzivatel po
+    /// najeti aplikace do teto obrazovky mohl heslo rovnou psat bez
+    /// nutnosti tam nejdriv kliknout.
+    focus_requested: bool,
 }
 
 enum LockState {
@@ -1648,6 +1653,7 @@ impl TermxApp {
         let mut password = std::mem::take(&mut screen.password);
         let mut confirm = std::mem::take(&mut screen.confirm);
         let error = screen.error.clone();
+        let focus_requested = screen.focus_requested;
 
         let mut submit = false;
         let mut skip = false;
@@ -1670,6 +1676,14 @@ impl TermxApp {
                         .hint_text("Hlavní heslo")
                         .desired_width(260.0),
                 );
+                // Jen jednou (pri prvnim vykresleni teto obrazovky, nebo
+                // znovu po chybe - viz `focus_requested = false` nize) -
+                // jinak by fokus kazdy snimek "krad" i kdyz uzivatel
+                // zrovna kliknul jinam (napr. do pole pro zopakovani
+                // hesla u noveho trezoru).
+                if !focus_requested {
+                    pw_resp.request_focus();
+                }
                 let enter_pressed = pw_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
                 if !vault_exists {
@@ -1722,6 +1736,7 @@ impl TermxApp {
         let LockState::Locked(screen) = &mut self.state else { return };
         screen.password = password.clone();
         screen.confirm = confirm.clone();
+        screen.focus_requested = true;
 
         if skip {
             let registry = self.registry.take().expect("registry byl jiz spotrebovan");
@@ -1751,6 +1766,10 @@ impl TermxApp {
             Err(e) => {
                 let LockState::Locked(screen) = &mut self.state else { return };
                 screen.error = Some(e);
+                // Po neuspesnem pokusu se pole hesla znovu samo
+                // fokusne (viz `pw_resp.request_focus()` vyse), aby
+                // uzivatel mohl rovnou zkusit heslo napsat znovu.
+                screen.focus_requested = false;
             }
         }
     }
