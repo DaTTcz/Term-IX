@@ -149,6 +149,43 @@ impl Default for QuickConnectForm {
     }
 }
 
+/// Vestaveny formular primo na Home tabu pro rychle pripojeni k novemu
+/// serveru (viz `MainApp::render_home`) - misto puvodniho prazdneho
+/// mista pod logem, kam se logo+verze presunuly nize (feedback "logo
+/// bych a info o verzi bych dal dolů ... do toho prostoru ... bych dal
+/// formulář pro připojení k novému serveru"). Na rozdil od
+/// [`NewSessionForm`]/[`QuickConnectForm`] (samostatne modalni dialogy
+/// z menu Sessions, ktere zustavaji beze zmeny) jde o JEDEN spolecny
+/// formular s prepinacem `save` - podle nej se pri "Připojit" bud'
+/// (a) session ulozi do trezoru stejne jako `NewSessionForm`, nebo (b)
+/// jen jako docasne `MainApp::ad_hoc_sessions` spojeni jako u
+/// `QuickConnectForm` - v obou pripadech se navic (na rozdil od
+/// `NewSessionForm`) hned otevre Connection tab, protoze smysl tohoto
+/// formulare je primo "připojit", ne jen "přidat do seznamu".
+struct HomeConnectForm {
+    name: String,
+    folder: String,
+    host: String,
+    port: String,
+    username: String,
+    password: String,
+    save: bool,
+}
+
+impl Default for HomeConnectForm {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            folder: String::new(),
+            host: String::new(),
+            port: "22".to_string(),
+            username: String::new(),
+            password: String::new(),
+            save: true,
+        }
+    }
+}
+
 enum RenameTarget {
     Session(Uuid),
     Folder(String),
@@ -497,6 +534,13 @@ struct MainApp {
     /// Potvrzeni zavreni tabu s aktivnim SSH spojenim - viz
     /// [`CloseTabConfirm`].
     close_tab_confirm: Option<CloseTabConfirm>,
+    /// Vestaveny formular na Home tabu, viz [`HomeConnectForm`]. Na
+    /// rozdil od ostatnich formularu/dialogu vyse NENI `Option` - je
+    /// porad viditelny (soucast Home tabu, ne modalni okno), takze
+    /// jednoduse zustava a prubezne se do nej ceka pise, dokud se
+    /// nepouzije (`submit_home_connect`, ktera ho zase vrati na
+    /// vychozi hodnotu) nebo se z Home tabu neodejde.
+    home_connect_form: HomeConnectForm,
 
     /// Uzivatelska nastaveni (viz [`AppSettings`]) - nacte se pri startu
     /// v `TermxApp::new` a preda sem, uklada se zpet v `TermxApp::save`.
@@ -538,6 +582,7 @@ impl MainApp {
             export_dialog: None,
             import_dialog: None,
             close_tab_confirm: None,
+            home_connect_form: HomeConnectForm::default(),
             settings,
             logo_texture: None,
             update_check: UpdateCheck::NotStarted,
@@ -572,6 +617,12 @@ impl MainApp {
             export_dialog: None,
             import_dialog: None,
             close_tab_confirm: None,
+            // `save: false` - v hostovskem rezimu neni trezor kam
+            // ukladat (viz `is_guest`), takze vychozi hodnota (jinak
+            // `true`, viz `HomeConnectForm::default`) by tu byla
+            // matouci; checkbox se navic v `render_home` u hosta vubec
+            // nezobrazuje.
+            home_connect_form: HomeConnectForm { save: false, ..HomeConnectForm::default() },
             settings,
             logo_texture: None,
             update_check: UpdateCheck::NotStarted,
@@ -867,14 +918,82 @@ impl MainApp {
         }
     }
 
+    /// Home tab - nahore vestaveny formular pro pripojeni k novemu
+    /// serveru ([`HomeConnectForm`]), dole (kam se drive puvodne
+    /// vykreslovalo hned na zacatku) logo/nazev/verze/stav aktualizace -
+    /// viz feedback "logo bych a info o verzi bych dal dolů a do toho
+    /// prostoru kde je ted logo a info o verzi bych dal formulář pro
+    /// připojení k novému serveru".
     fn render_home(&mut self, ui: &mut egui::Ui) {
         let logo = self.logo_texture(ui.ctx());
+        let mut submit = false;
 
         ui.vertical_centered(|ui| {
-            ui.add_space(32.0);
+            ui.add_space(24.0);
+            ui.heading("Připojit k novému serveru");
+            ui.add_space(10.0);
+
+            egui::Grid::new("home_connect_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                ui.label("Název:");
+                ui.text_edit_singleline(&mut self.home_connect_form.name);
+                ui.end_row();
+
+                // Slozka dava smysl jen kdyz se bude i ukladat (viz
+                // `save` nize) - u hosta (zadny trezor) i u docasneho
+                // rychleho spojeni (`save == false`) se radek vubec
+                // nezobrazi.
+                if !self.is_guest && self.home_connect_form.save {
+                    ui.label("Složka:");
+                    ui.text_edit_singleline(&mut self.home_connect_form.folder);
+                    ui.end_row();
+                }
+
+                ui.label("Host:");
+                ui.text_edit_singleline(&mut self.home_connect_form.host);
+                ui.end_row();
+
+                ui.label("Port:");
+                ui.text_edit_singleline(&mut self.home_connect_form.port);
+                ui.end_row();
+
+                ui.label("Uživatel:");
+                ui.text_edit_singleline(&mut self.home_connect_form.username);
+                ui.end_row();
+
+                ui.label("Heslo:");
+                ui.add(egui::TextEdit::singleline(&mut self.home_connect_form.password).password(true));
+                ui.end_row();
+            });
+
+            ui.add_space(6.0);
+            if self.is_guest {
+                // V hostovskem rezimu neni kam ukladat - zadny checkbox,
+                // rovnou jen vysvetlujici poznamka (`save` uz je natvrdo
+                // `false` z `MainApp::new_guest`).
+                ui.label(egui::RichText::new("Hostovský režim: spojení se neukládá, jde vždy jen o dočasné rychlé spojení.").small());
+            } else {
+                ui.checkbox(&mut self.home_connect_form.save, "Uložit server do trezoru");
+                ui.label(
+                    egui::RichText::new(
+                        "Když je zaškrtnuto, server se uloží do trezoru a objeví se ve stromu vlevo. \
+                         Když ne, jde jen o dočasné rychlé spojení (zmizí se zavřením tabu/aplikace).",
+                    )
+                    .small(),
+                );
+            }
+
+            ui.add_space(10.0);
+            if ui.add_enabled(!self.home_connect_form.host.trim().is_empty(), egui::Button::new("Připojit")).clicked() {
+                submit = true;
+            }
+
+            ui.add_space(20.0);
+            ui.separator();
+            ui.add_space(16.0);
+
             if let Some(logo) = logo {
-                ui.add(egui::Image::new(&logo).max_size(egui::vec2(96.0, 96.0)));
-                ui.add_space(10.0);
+                ui.add(egui::Image::new(&logo).max_size(egui::vec2(72.0, 72.0)));
+                ui.add_space(8.0);
             }
             ui.heading("Term-IX");
             ui.label(format!("verze {}", env!("CARGO_PKG_VERSION")));
@@ -901,18 +1020,55 @@ impl MainApp {
                     ui.label(egui::RichText::new(format!("Kontrolu aktualizace se nepodařilo provést ({e}).")).small());
                 }
             }
-
-            ui.add_space(18.0);
-            ui.separator();
-            ui.add_space(16.0);
-
-            if self.is_guest {
-                ui.label("Hostovský režim: uložené servery nejsou dostupné.");
-                ui.label("Otevřete rychlé spojení přes menu Sessions → Nové rychlé spojení...");
-            } else {
-                ui.label("Vyberte server vlevo, nebo přidejte nový přes menu Sessions.");
-            }
         });
+
+        if submit {
+            self.submit_home_connect();
+        }
+    }
+
+    /// Zpracovani tlacitka "Připojit" v [`HomeConnectForm`] - podle
+    /// `form.save` bud' ulozi novou session do trezoru (stejne jako
+    /// `show_new_session_dialog`), nebo ji zalozi jen jako docasnou
+    /// (`ad_hoc_sessions`, stejne jako `show_quick_connect_dialog`), a v
+    /// obou pripadech rovnou otevre jeji Connection tab. Hodnoty z
+    /// formulare se napred zkopiruji do lokalnich promennych (ne
+    /// pujcka `&self.home_connect_form` drzena pres cele telo metody),
+    /// aby slo hned nato normalne pujcit `self` mutable (`self.vault`,
+    /// `self.ad_hoc_sessions`, `self.open_session_tab`) - stejny duvod,
+    /// proc `render_connection` drive kopiruje (`.cloned()`) session
+    /// misto drzeni reference.
+    fn submit_home_connect(&mut self) {
+        let host = self.home_connect_form.host.trim().to_string();
+        if host.is_empty() {
+            return;
+        }
+        let port: u16 = self.home_connect_form.port.trim().parse().unwrap_or(22);
+        let name = if self.home_connect_form.name.trim().is_empty() { host.clone() } else { self.home_connect_form.name.clone() };
+        let username = self.home_connect_form.username.clone();
+        let password = self.home_connect_form.password.clone();
+        let folder = self.home_connect_form.folder.trim().to_string();
+        let save = self.home_connect_form.save && !self.is_guest;
+
+        let mut session = Session::new(name, Protocol::Ssh, host, port, AuthMethod::Password { username, password });
+        let id = session.id;
+
+        if save {
+            if !folder.is_empty() {
+                session.group = Some(folder);
+            }
+            self.vault.data.servers.push(session);
+            self.save_vault();
+        } else {
+            self.ad_hoc_sessions.push(session);
+        }
+
+        self.open_session_tab(id);
+        // Ceka minule pouzita hodnota `save` (pokud neni host) se
+        // zamerne zachova do dalsiho formulare - kdo si uklada servery,
+        // si je typicky bude ukladat i priste.
+        let keep_save = self.home_connect_form.save;
+        self.home_connect_form = HomeConnectForm { save: keep_save, ..HomeConnectForm::default() };
     }
 
     fn render_settings(&mut self, ui: &mut egui::Ui) {
