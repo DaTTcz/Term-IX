@@ -1307,7 +1307,7 @@ impl MainApp {
 
                         let focused = self.split_focus == i;
                         if focused {
-                            ui.painter().rect_stroke(rect, egui::Rounding::same(2.0), egui::Stroke::new(2.0, theme::ACCENT));
+                            ui.painter().rect_stroke(rect, egui::Rounding::same(2.0), egui::Stroke::new(2.0_f32, theme::ACCENT));
                         }
 
                         self.render_tab_content(ui, kind, focused);
