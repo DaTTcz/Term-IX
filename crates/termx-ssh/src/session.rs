@@ -449,6 +449,12 @@ async fn run_session(
                             .await
                             .map_err(|e| anyhow::anyhow!("zmena velikosti terminalu selhala: {e}"))?;
                     }
+                    // `SshInput::Credentials` dava smysl jen PRED touto
+                    // smyckou (viz cekani na prihlaseni vyse) - relace uz
+                    // je v tuto chvili autentizovana, takze se pripadna
+                    // (neocekavana) dalsi zprava tohoto typu proste
+                    // ignoruje, misto aby kvuli ni spojeni spadlo.
+                    Some(SshInput::Credentials { .. }) => {}
                     // GUI strana zahodila `input_tx` (zavreny tab) - cas
                     // se cistě odpojit, nejde o chybu.
                     None => break,
