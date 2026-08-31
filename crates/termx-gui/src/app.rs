@@ -85,10 +85,15 @@ impl Default for AppSettings {
     }
 }
 
-/// Stejne logo jako u ikony aplikace (`lib.rs`) - zvlast nacteno i zde,
-/// aby ho slo vykreslit jako obrazek primo v Home tabu (`render_home`),
-/// ne jen pouzit jako ikonu okna/tasklisty.
-const LOGO_BYTES: &[u8] = include_bytes!("../../../assets/icons/hicolor/128x128/apps/term-ix.png");
+/// Cely graficky "wordmark" (znacka + napis "TERM-IX" pod ni v jednom
+/// obrazku) pro Home tab (`render_home`) - viz zpetna vazba "na
+/// hometabu bych použil term-ix_logo.png je tam i název pěkně v
+/// obrázku". Predtim se tu pouzivala jen ctvercova ikona aplikace
+/// (`lib.rs`, `assets/icons/hicolor/128x128/apps/term-ix.png`, bez
+/// napisu) - ten obrazek zustava vyhrazeny pro ikonu okna/tasklisty,
+/// tady uz se nepouziva. Stejny soubor jako `termx-splash` pro uvodni
+/// "boot" obrazovku (`crates/termx-splash/src/lib.rs::LOGO_BYTES`).
+const LOGO_BYTES: &[u8] = include_bytes!("../../../assets/term-ix_logo.png");
 
 /// Stav kontroly dostupnosti nove verze (viz `MainApp::maybe_start_update_check`
 /// a `MainApp::poll_update_check`) - zobrazuje se v Home tabu.
@@ -1100,15 +1105,15 @@ impl MainApp {
             ui.add_space(16.0);
 
             if let Some(logo) = logo {
-                // Zpetna vazba "logo můžeme ukázat větší na Domácím TABu" -
-                // puvodne 72x72 (kdyz logo/verze byly jen malym doplnkem
-                // pod formularem pripojeni, viz komentar u teto metody
-                // vyse), ted uz vetsi, protoze je to jediny obrazek na
-                // cele obrazovce a ma prostor.
-                ui.add(egui::Image::new(&logo).max_size(egui::vec2(160.0, 160.0)));
+                // Zpetna vazba "logo můžeme ukázat větší na Domácím TABu" a
+                // pak "na hometabu bych použil term-ix_logo.png je tam i
+                // název pěkně v obrázku" - `LOGO_BYTES` uz je cely
+                // "wordmark" (znacka + napis "TERM-IX" v jednom obrazku),
+                // takze samostatny `ui.heading("Term-IX")` pod nim by uz
+                // byl zbytecne duplicitni a byl odstranen.
+                ui.add(egui::Image::new(&logo).max_size(egui::vec2(220.0, 220.0)));
                 ui.add_space(8.0);
             }
-            ui.heading("Term-IX");
             ui.label(format!("{} {}", tr.version_label, env!("CARGO_PKG_VERSION")));
             ui.label(egui::RichText::new("DaTTcz").small());
             ui.add_space(10.0);
