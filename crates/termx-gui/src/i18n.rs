@@ -135,9 +135,14 @@ pub struct Strings {
     /// programu").
     pub menu_help: &'static str,
 
-    // -- dialog "O programu" (`MainApp::show_about_dialog`) --
+    // -- dialog "O programu" (`MainApp::show_about_dialog`) - a stejny
+    // text i pod logem na Home tabu (`MainApp::render_home`), viz
+    // pozadavek "do O programu a na home tab bych ještě napsal že
+    // aplikace je psaná v RUST a autor je David Trubka" --
     pub about_dialog_title: &'static str,
     pub about_github_link: &'static str,
+    pub about_author: &'static str,
+    pub about_written_in_rust: &'static str,
 
     // -- taby (`MainApp::tab_title`) --
     pub tab_home: &'static str,
@@ -336,6 +341,8 @@ pub const CS: Strings = Strings {
 
     about_dialog_title: "O programu",
     about_github_link: "Zdrojový kód na GitHubu",
+    about_author: "Autor: David Trubka (DaTTcz)",
+    about_written_in_rust: "Napsáno v jazyce Rust",
 
     tab_home: "Domů",
     tab_settings: "Nastavení",
@@ -516,6 +523,8 @@ pub const EN: Strings = Strings {
 
     about_dialog_title: "About",
     about_github_link: "Source code on GitHub",
+    about_author: "Author: David Trubka (DaTTcz)",
+    about_written_in_rust: "Written in Rust",
 
     tab_home: "Home",
     tab_settings: "Settings",

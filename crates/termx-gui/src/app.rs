@@ -1529,7 +1529,8 @@ impl MainApp {
                 ui.add_space(8.0);
             }
             ui.label(format!("{} {}", tr.version_label, env!("CARGO_PKG_VERSION")));
-            ui.label(egui::RichText::new("DaTTcz").small());
+            ui.label(egui::RichText::new(tr.about_author).small());
+            ui.label(egui::RichText::new(tr.about_written_in_rust).small());
             ui.add_space(10.0);
 
             self.render_update_check_status(ui);
@@ -2271,7 +2272,8 @@ impl MainApp {
                     ui.add_space(6.0);
                 }
                 ui.label(format!("{} {}", tr.version_label, env!("CARGO_PKG_VERSION")));
-                ui.label(egui::RichText::new("DaTTcz").small());
+                ui.label(egui::RichText::new(tr.about_author).small());
+                ui.label(egui::RichText::new(tr.about_written_in_rust).small());
 
                 ui.add_space(10.0);
                 ui.separator();
