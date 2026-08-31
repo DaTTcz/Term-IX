@@ -1028,7 +1028,15 @@ impl MainApp {
                                 ui.painter().circle_filled(rect.center(), 4.0, theme::DANGER);
                             }
 
-                            if ui.add(egui::Label::new(title.as_str()).sense(egui::Sense::click())).clicked() {
+                            // `.selectable(false)` - bez toho ma `Label`
+                            // (i s vlastnim `Sense::click()`) jeste navic
+                            // vychozi podporu vyberu textu (kopirovani),
+                            // coz pri najeti mysi meni kurzor na "I-beam"
+                            // (jako by tam slo psat) - matouci zpetna
+                            // vazba "matoucí, protože tam nic psát
+                            // nemůžeme", nazev tabu jde jen KLIKNOUT, ne
+                            // upravovat primo v tab liste.
+                            if ui.add(egui::Label::new(title.as_str()).sense(egui::Sense::click()).selectable(false)).clicked() {
                                 to_select = Some(idx);
                             }
 

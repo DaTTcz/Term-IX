@@ -10,20 +10,21 @@
 //!   citelnosti na svetlem pozadi), aby obe temata pusobila jako
 //!   varianty JEDNE znacky, ne dva nesouvisejici vzhledy.
 //!
-//! POZOR NA ROZSAH: `Theme::apply` prepisuje jen obecne `egui::Visuals`
+//! POZOR NA ROZSAH: `Theme::apply` prepisuje obecne `egui::Visuals`
 //! (pozadi panelu/oken, barva textu, zvyrazneni, hover/active stavy
-//! tlacitek) - to pokryva vetsinu UI (menu, tlacitka, dialogy, strom,
-//! zalozky, Nastaveni...) automaticky, protoze ty vsechny cerpaji barvy
-//! primo z aktualnich `Visuals`. NEpokryva ale par mist, ktera si barvu
-//! berou primo z konstant `ACCENT`/`DANGER`/`BG_PANEL`/`BG_DARK`/`TEXT`
-//! nize (stavovy radek terminalu, jeho vychozi ANSI popredi/pozadi,
-//! par `colored_label` hlasek) - ty zustavaji zamerne ve puvodni tmave
-//! palete v OBOU tematech, stejne jako skutecny terminal typicky
-//! zustava tmavy i v ramci jinak svetleho OS motivu. Kdyby se do
-//! budoucna melo prepnout i tohle, tyto konstanty by se musely stat
-//! funkcemi zavislymi na aktualnim tematu (napr. ulozenem v `egui::Context`
-//! pres `ctx.data_mut`, ktery uz je timto zpusobem "globalne" dostupny
-//! odkudkoliv, kde je `ctx`/`ui` po ruce).
+//! tlacitek) - vsechny panely/dialogy/tlacitka v aplikaci (vc. hlavni
+//! plochy `CentralPanel` a stavoveho prouzku terminalu -
+//! `terminal::TerminalSession::render_status_bar`) si pozadi berou
+//! DYNAMICKY primo z aktualnich `Visuals` (napr. `ui.visuals().panel_fill`),
+//! ne z konstant nize, takze spravne sleduji zvolene tema (viz zpetna
+//! vazba "světlé téma je nečitelné" / "ještě info panel vespod se
+//! nepřepl barevně", ktera odhalila dve mista, kde to puvodne
+//! neplatilo). Konstanty `ACCENT`/`DANGER`/`BG_PANEL`/`BG_DARK`/`TEXT`
+//! nize zustavaji zamerne SPOLECNE pro obe temata jen tam, kde uz jde
+//! primo o obsah SAMOTNEHO terminalu (vychozi ANSI popredi/pozadi
+//! bufferu terminalu - `terminal::cell_colors`) - text uvnitr terminalu
+//! typicky zustava tmavy i v ramci jinak svetleho OS motivu, stejne
+//! jako u skutecnych terminalovych emulatoru.
 
 use egui::{Color32, Visuals};
 

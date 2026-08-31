@@ -720,10 +720,17 @@ impl TerminalSession {
             items.push((format!("💾 /: {disk}%"), tr.status_disk_tooltip));
         }
 
+        // Pozadi bereme dynamicky z aktualniho tematu (`ui.visuals().panel_fill`),
+        // ne napevno `theme::BG_PANEL` - stejna oprava jako u hlavniho
+        // `CentralPanel` v `app.rs` (viz tam zpetna vazba "světlé téma
+        // je nečitelné" a nasledne "ještě info panel vespod se
+        // nepřepl barevně" - tenhle stavovy prouzek byl presne ten
+        // zbyvajici hardcoded kousek).
+        let panel_fill = ui.visuals().panel_fill;
         egui::TopBottomPanel::bottom(egui::Id::new(("term_status_bar", self.session.id)))
             .frame(
                 egui::Frame::none()
-                    .fill(theme::BG_PANEL)
+                    .fill(panel_fill)
                     .inner_margin(egui::Margin::symmetric(10.0, 6.0)),
             )
             .show_separator_line(false)
