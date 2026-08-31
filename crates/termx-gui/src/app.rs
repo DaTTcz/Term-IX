@@ -83,11 +83,42 @@ pub struct AppSettings {
     /// ulozenymi nastavenimi bez tohoto pole).
     #[serde(default)]
     pub theme: theme::Theme,
+    /// Jestli je boci panel se stromem serveru zrovna rozbaleny (`true`,
+    /// vychozi) nebo sbaleny na uzky pruh (`false`) - viz pozadavek
+    /// "zobrazit/schovat boční panel bych dal vpravo na řádek vedle
+    /// +Složka" a `MainApp::show_tree`/`MainApp::update`.
+    /// `#[serde(default = "default_true")]` (NE obycejne `#[serde(default)]`,
+    /// ktere by pro `bool` dosadilo `false`) - u stareho souboru bez
+    /// tohoto pole ma panel zustat rozbaleny, presne jak fungoval
+    /// predtim, ne se zniceho nic schovat.
+    #[serde(default = "default_true")]
+    pub sidebar_visible: bool,
+    /// Velikost pisma terminalu (`terminal::terminal_font`) - viz
+    /// pozadavek "přidal bych velikost písma i do Nastavení", ovladane
+    /// jak Nastavenim (Slider), tak View menu (+/-). `#[serde(default = "...")]`
+    /// dosazuje puvodni napevno danou velikost (`terminal::DEFAULT_FONT_SIZE`)
+    /// pro stare ulozene soubory bez tohoto pole.
+    #[serde(default = "terminal::default_font_size")]
+    pub term_font_size: f32,
+}
+
+/// Pomocna funkce pro `#[serde(default = "default_true")]` u
+/// `sidebar_visible` - `serde` potrebuje jmenovanou funkci (nejde tam
+/// dat literal primo).
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { auto_reconnect: false, window_maximized: false, lang: Lang::default(), theme: theme::Theme::default() }
+        Self {
+            auto_reconnect: false,
+            window_maximized: false,
+            lang: Lang::default(),
+            theme: theme::Theme::default(),
+            sidebar_visible: true,
+            term_font_size: terminal::default_font_size(),
+        }
     }
 }
 
@@ -761,6 +792,11 @@ struct MainApp {
     update_rx: Option<std::sync::mpsc::Receiver<Result<Option<LatestRelease>, String>>>,
 
     status_message: Option<String>,
+    /// Dialog "O programu" (`show_about_dialog`) - na rozdil od
+    /// ostatnich dialogu neni `Option<NejakyStav>`, protoze nema zadny
+    /// rozepsany formularovy stav k zachovani/zahozeni, jen otevreno/
+    /// zavreno (viz pozadavek "místo nápovědy bych dal O programu").
+    about_dialog_open: bool,
 }
 
 impl MainApp {
@@ -793,6 +829,7 @@ impl MainApp {
             update_check: UpdateCheck::NotStarted,
             update_rx: None,
             status_message: None,
+            about_dialog_open: false,
         }
     }
 
@@ -838,6 +875,7 @@ impl MainApp {
             update_check: UpdateCheck::NotStarted,
             update_rx: None,
             status_message: None,
+            about_dialog_open: false,
         }
     }
 
@@ -863,6 +901,7 @@ impl MainApp {
         self.export_dialog = None;
         self.import_dialog = None;
         self.close_tab_confirm = None;
+        self.about_dialog_open = false;
     }
 
     /// Najde session podle id - nejdriv mezi ulozenymi servery v
@@ -1140,6 +1179,15 @@ impl MainApp {
         if !matches!(self.update_check, UpdateCheck::NotStarted) {
             return;
         }
+        self.start_update_check();
+    }
+
+    /// Spolecne "telo" `maybe_start_update_check` (automaticka kontrola
+    /// jednou za beh aplikace) BEZ podminky na `UpdateCheck::NotStarted` -
+    /// pouziva i tlacitko "Zkontrolovat aktualizace" v dialogu "O
+    /// programu" (`show_about_dialog`), ktere ma jit spustit kdykoliv
+    /// znovu, i kdyz uz nejaky vysledek existuje (`UpToDate`/`Failed`/...).
+    fn start_update_check(&mut self) {
         self.update_check = UpdateCheck::Checking;
         let (tx, rx) = std::sync::mpsc::channel();
         let current_version = env!("CARGO_PKG_VERSION").to_string();
@@ -1150,6 +1198,34 @@ impl MainApp {
             let _ = tx.send(result);
         });
         self.update_rx = Some(rx);
+    }
+
+    /// Vykresli aktualni stav kontroly aktualizace (`self.update_check`) -
+    /// sdilene mezi Home tabem (`render_home`) a dialogem "O programu"
+    /// (`show_about_dialog`), aby obe mista zobrazovala stejnou
+    /// informaci stejnym zpusobem misto dvou kopii stejneho `match`u.
+    fn render_update_check_status(&mut self, ui: &mut egui::Ui) {
+        let tr = i18n::t(self.settings.lang);
+        match &self.update_check {
+            UpdateCheck::NotStarted | UpdateCheck::Checking => {
+                ui.label(egui::RichText::new(tr.checking_update).small());
+            }
+            UpdateCheck::UpToDate => {
+                ui.colored_label(theme::ACCENT, tr.up_to_date);
+            }
+            UpdateCheck::Available(latest) => {
+                ui.colored_label(egui::Color32::from_rgb(0xe6, 0xc2, 0x5a), i18n::update_available(self.settings.lang, &latest.version));
+                if ui.button(tr.btn_open_release_page).clicked() {
+                    ui.ctx().open_url(egui::OpenUrl {
+                        url: latest.url.clone(),
+                        new_tab: true,
+                    });
+                }
+            }
+            UpdateCheck::Failed(e) => {
+                ui.label(egui::RichText::new(i18n::update_check_failed(self.settings.lang, e)).small());
+            }
+        }
     }
 
     /// Vyzvedne vysledek kontroly aktualizace, pokud uz z pozadi
@@ -1280,26 +1356,7 @@ impl MainApp {
             ui.label(egui::RichText::new("DaTTcz").small());
             ui.add_space(10.0);
 
-            match &self.update_check {
-                UpdateCheck::NotStarted | UpdateCheck::Checking => {
-                    ui.label(egui::RichText::new(tr.checking_update).small());
-                }
-                UpdateCheck::UpToDate => {
-                    ui.colored_label(theme::ACCENT, tr.up_to_date);
-                }
-                UpdateCheck::Available(latest) => {
-                    ui.colored_label(egui::Color32::from_rgb(0xe6, 0xc2, 0x5a), i18n::update_available(self.settings.lang, &latest.version));
-                    if ui.button(tr.btn_open_release_page).clicked() {
-                        ui.ctx().open_url(egui::OpenUrl {
-                            url: latest.url.clone(),
-                            new_tab: true,
-                        });
-                    }
-                }
-                UpdateCheck::Failed(e) => {
-                    ui.label(egui::RichText::new(i18n::update_check_failed(self.settings.lang, e)).small());
-                }
-            }
+            self.render_update_check_status(ui);
         });
 
         if submit {
@@ -1439,6 +1496,16 @@ impl MainApp {
         ui.add_space(4.0);
         ui.label(egui::RichText::new(tr.settings_theme_note).small());
 
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.label(tr.settings_font_size_label);
+            // Stejna hodnota jako `menu_view_font_increase`/`_decrease`
+            // (View menu) - viz pozadavek "přidal bych velikost písma i
+            // do Nastavení". `Slider` misto proste `DragValue`, aby byly
+            // rovnou videt i meze (`MIN_FONT_SIZE`/`MAX_FONT_SIZE`).
+            ui.add(egui::Slider::new(&mut self.settings.term_font_size, terminal::MIN_FONT_SIZE..=terminal::MAX_FONT_SIZE).suffix(" px"));
+        });
+
         ui.add_space(18.0);
         ui.separator();
         ui.add_space(12.0);
@@ -1477,7 +1544,7 @@ impl MainApp {
         self.terminal_sessions.entry(id).or_insert_with(|| terminal::TerminalSession::new(&session));
 
         if let Some(term_session) = self.terminal_sessions.get_mut(&id) {
-            term_session.render(ui, self.settings.auto_reconnect, self.settings.lang);
+            term_session.render(ui, self.settings.auto_reconnect, self.settings.lang, self.settings.term_font_size);
         }
     }
 
@@ -1513,8 +1580,44 @@ impl MainApp {
                         ui.close_menu();
                     }
                 });
-                ui.menu_button(tr.menu_view, |_ui| {});
-                ui.menu_button(tr.menu_tools, |_ui| {});
+                // Obsah viz pozadavek "Zobrazení bych dal jak navrhuješ" -
+                // velikost pisma terminalu, cela obrazovka, rychle
+                // prepnuti tematu. Sbaleni/rozbaleni bociho panelu SEM
+                // uz NEPATRI - to uzivatel vyslovne presunul na tlacitko
+                // primo v panelu samotnem (viz `show_tree`).
+                ui.menu_button(tr.menu_view, |ui| {
+                    if ui.button(tr.menu_view_font_increase).clicked() {
+                        self.settings.term_font_size = (self.settings.term_font_size + 1.0).min(terminal::MAX_FONT_SIZE);
+                        ui.close_menu();
+                    }
+                    if ui.button(tr.menu_view_font_decrease).clicked() {
+                        self.settings.term_font_size = (self.settings.term_font_size - 1.0).max(terminal::MIN_FONT_SIZE);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button(tr.menu_view_fullscreen).clicked() {
+                        // `unwrap_or(false)` - `fullscreen` je (stejne
+                        // jako uz drive `maximized`, viz `TermxApp::update`)
+                        // `None`, dokud to backend jeste nezjistil
+                        // (typicky jen prvnich par snimku) - v tom
+                        // vzacnem pripade radeji predpokladat "neni v
+                        // cele obrazovce" (bezny vychozi stav okna) nez
+                        // tlacitko nechat nic nedelat.
+                        let is_fullscreen = ctx.input(|i| i.viewport().fullscreen).unwrap_or(false);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.menu_button(tr.settings_appearance_heading, |ui| {
+                        for th in theme::Theme::ALL {
+                            if ui.button(th.display_name(self.settings.lang)).clicked() {
+                                self.settings.theme = th;
+                                theme::apply(ctx, th);
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                });
                 // Zpetna vazba "V nastavení bychom nemuseli mít podsložky
                 // Předvolby a Změnit heslo k trezoru... zatím tam toho
                 // nemáme tolik takže bych dal vše přímo bez podsložek" -
@@ -1527,9 +1630,15 @@ impl MainApp {
                 if ui.button(tr.menu_settings).clicked() {
                     self.open_settings_tab();
                 }
-                ui.menu_button(tr.menu_help, |ui| {
-                    ui.label(format!("Term-IX v{}", env!("CARGO_PKG_VERSION")));
-                });
+                // Stejny vzor jako "Nastavení" vyse - misto rozklikavaciho
+                // menu jen s jednou polozkou rovnou tlacitko, ktere otevre
+                // dialog "O programu" (viz pozadavek "místo nápovědy
+                // bych dal O programu kde můžeme dát odkaz na github a
+                // ruční kontrolu verze").
+                if ui.button(tr.menu_help).clicked() {
+                    self.close_all_dialogs();
+                    self.about_dialog_open = true;
+                }
             });
         });
     }
@@ -1952,6 +2061,53 @@ impl MainApp {
             self.close_tab(confirm.idx);
         } else if open {
             self.close_tab_confirm = Some(confirm);
+        }
+    }
+
+    /// Dialog "O programu" - viz [`MainApp::about_dialog_open`] a
+    /// pozadavek "místo nápovědy bych dal O programu kde můžeme dát
+    /// odkaz na github a ruční kontrolu verze". Na rozdil od vetsiny
+    /// ostatnich dialogu nema zadny rozepsany formularovy stav (jen
+    /// otevreno/zavreno), takze i tady rovnou cteme/zapisujeme primo
+    /// `self.about_dialog_open`, ne `Option<...>::take()`.
+    fn show_about_dialog(&mut self, ctx: &egui::Context) {
+        if !self.about_dialog_open {
+            return;
+        }
+        let mut open = true;
+        let tr = i18n::t(self.settings.lang);
+        let logo = self.logo_texture(ctx);
+
+        centered_dialog(egui::Window::new(tr.about_dialog_title), ctx).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                if let Some(logo) = logo {
+                    ui.add(egui::Image::new(&logo).max_size(egui::vec2(96.0, 96.0)));
+                    ui.add_space(6.0);
+                }
+                ui.label(format!("{} {}", tr.version_label, env!("CARGO_PKG_VERSION")));
+                ui.label(egui::RichText::new("DaTTcz").small());
+            });
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(10.0);
+
+            ui.hyperlink_to(tr.about_github_link, "https://github.com/DaTTcz/Term-IX");
+
+            ui.add_space(10.0);
+            if ui.button(tr.btn_check_updates).clicked() {
+                // Na rozdil od `maybe_start_update_check` (Home tab, viz
+                // `render_home`) BEZ podminky na `UpdateCheck::NotStarted` -
+                // rucni tlacitko ma jit spustit kdykoliv znovu, i kdyz uz
+                // nejaky vysledek existuje.
+                self.start_update_check();
+            }
+            ui.add_space(4.0);
+            self.render_update_check_status(ui);
+        });
+
+        if !open {
+            self.about_dialog_open = false;
         }
     }
 
@@ -2389,23 +2545,48 @@ impl MainApp {
     // -- strom serveru -----------------------------------------------
 
     fn show_tree(&mut self, ui: &mut egui::Ui) {
+        let tr = i18n::t(self.settings.lang);
+
+        if !self.settings.sidebar_visible {
+            // Sbaleno na uzky pruh (viz `MainApp::update`, sirka panelu
+            // se v tomto stavu vynucuje na `SIDEBAR_COLLAPSED_WIDTH`) -
+            // jedine, co se vejde/ma smysl zobrazit, je tlacitko pro
+            // opetovne rozbaleni.
+            ui.add_space(4.0);
+            ui.vertical_centered(|ui| {
+                if ui.button(">").on_hover_text(tr.btn_show_sidebar).clicked() {
+                    self.settings.sidebar_visible = true;
+                }
+            });
+            return;
+        }
+
+        ui.horizontal(|ui| {
+            if !self.is_guest {
+                if ui.button(tr.btn_new_server).clicked() {
+                    self.close_all_dialogs();
+                    self.new_session_form = Some(NewSessionForm::default());
+                }
+                if ui.button(tr.btn_new_folder).clicked() {
+                    self.close_all_dialogs();
+                    self.new_folder_dialog = Some(NewFolderDialog::new());
+                }
+            }
+            // Tlacitko pro sbaleni panelu, zarovnane vpravo na tomto
+            // radku - viz pozadavek "zobrazit/schovat boční panel bych
+            // dal vpravo na řádek vedle +Složka".
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("<").on_hover_text(tr.btn_hide_sidebar).clicked() {
+                    self.settings.sidebar_visible = false;
+                }
+            });
+        });
+        ui.separator();
+
         if self.is_guest {
             self.render_guest_login(ui);
             return;
         }
-
-        let tr = i18n::t(self.settings.lang);
-        ui.horizontal(|ui| {
-            if ui.button(tr.btn_new_server).clicked() {
-                self.close_all_dialogs();
-                self.new_session_form = Some(NewSessionForm::default());
-            }
-            if ui.button(tr.btn_new_folder).clicked() {
-                self.close_all_dialogs();
-                self.new_folder_dialog = Some(NewFolderDialog::new());
-            }
-        });
-        ui.separator();
 
         let tree = build_tree(&self.vault.data);
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -2671,14 +2852,26 @@ impl MainApp {
         self.show_export_dialog(ctx);
         self.show_import_dialog(ctx);
         self.show_close_tab_confirm(ctx);
+        self.show_about_dialog(ctx);
 
-        egui::SidePanel::left("session_tree")
-            .resizable(true)
-            .default_width(240.0)
-            .width_range(160.0..=420.0)
-            .show(ctx, |ui| {
-                self.show_tree(ui);
-            });
+        // Sirka panelu se lisi podle toho, jestli je prave rozbaleny
+        // (bezna sirka, zmensitelna tazenim) nebo sbaleny na uzky pruh
+        // s jedinym tlacitkem pro znovu-rozbaleni (viz `show_tree` a
+        // pozadavek "zobrazit/schovat boční panel bych dal vpravo na
+        // řádek vedle +Složka"). `.exact_width(...)` (ne jen
+        // `.default_width(...)`) ve sbalenem stavu, aby se sirka
+        // vynutila KAZDY snimek bez ohledu na predchozi ulozenou/tazenim
+        // zmenenou hodnotu (ta zustava zapamatovana pro pristi rozbaleni).
+        const SIDEBAR_COLLAPSED_WIDTH: f32 = 32.0;
+        let mut side_panel = egui::SidePanel::left("session_tree");
+        side_panel = if self.settings.sidebar_visible {
+            side_panel.resizable(true).default_width(240.0).width_range(160.0..=420.0)
+        } else {
+            side_panel.resizable(false).exact_width(SIDEBAR_COLLAPSED_WIDTH)
+        };
+        side_panel.show(ctx, |ui| {
+            self.show_tree(ui);
+        });
 
         if let Some(msg) = self.status_message.clone() {
             egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {

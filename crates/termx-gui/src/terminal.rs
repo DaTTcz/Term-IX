@@ -110,7 +110,25 @@ const MIN_ROWS: usize = 5;
 const MAX_COLS: usize = 400;
 const MAX_ROWS: usize = 150;
 
-const FONT_SIZE: f32 = 14.0;
+/// Vychozi velikost pisma terminalu (`AppSettings::term_font_size`) pro
+/// noveho uzivatele/pri chybejicim poli ve starych ulozenych nastavenich
+/// (viz `#[serde(default = "...")]` u toho pole v `app.rs`) - stejna
+/// hodnota jako drivejsi napevno dana `FONT_SIZE`, takze existujici
+/// uzivatele zadnou zmenu nepoznaji, dokud si sami velikost nezmeni
+/// (Nastaveni, nebo View menu +/-).
+pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+/// Meze pro `menu_view_font_increase`/`_decrease` a Slider v Nastaveni -
+/// pod `MIN_FONT_SIZE` uz je text prakticky neciteny, nad `MAX_FONT_SIZE`
+/// se do tabu vejde jen par znaku na radek.
+pub const MIN_FONT_SIZE: f32 = 8.0;
+pub const MAX_FONT_SIZE: f32 = 28.0;
+
+/// Pomocna funkce pro `#[serde(default = "terminal::default_font_size")]`
+/// u `AppSettings::term_font_size` v `app.rs` - `serde` potrebuje
+/// jmenovanou funkci (nejde tam dat konstantu/literal primo).
+pub fn default_font_size() -> f32 {
+    DEFAULT_FONT_SIZE
+}
 
 /// Velikost pisma info proužku pod terminalem (`render_status_bar`) -
 /// zamerne vetsi nez vychozi "male" (`RichText::small()`, ~9-10px),
@@ -123,8 +141,8 @@ const STATUS_BAR_FONT_SIZE: f32 = 14.0;
 /// kazdy snimek (desitky za sekundu), ale v rozumnych intervalech.
 const AUTO_RECONNECT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
-fn terminal_font() -> egui::FontId {
-    egui::FontId::monospace(FONT_SIZE)
+fn terminal_font(font_size: f32) -> egui::FontId {
+    egui::FontId::monospace(font_size)
 }
 
 /// Vlastni rozmery mrizky pro `Term::new` - `alacritty_terminal` sam o
@@ -380,9 +398,9 @@ impl TerminalSession {
     /// aktualni dostupnou plochu tohoto snimku (uz po pripadnych
     /// hlaskach o stavu spojeni nad terminalem, ktere taky zabiraji
     /// misto).
-    fn resize_to_fit(&mut self, ui: &egui::Ui) {
+    fn resize_to_fit(&mut self, ui: &egui::Ui, font_size: f32) {
         let available = ui.available_size();
-        let font_id = terminal_font();
+        let font_id = terminal_font(font_size);
         let (char_w, row_h) = ui.fonts(|f| (f.glyph_width(&font_id, 'M'), f.row_height(&font_id)));
 
         if char_w <= 0.0 || row_h <= 0.0 {
@@ -593,8 +611,10 @@ impl TerminalSession {
     /// `auto_reconnect` je aktualni hodnota nastaveni "automaticky se
     /// pokoušet obnovit ztracené spojení" (viz `MainApp::settings` v
     /// `app.rs`) - samotny `TerminalSession` si zadne globalni
-    /// nastaveni nedrzi, dostava ho pri kazdem vykresleni zvenci.
-    pub fn render(&mut self, ui: &mut egui::Ui, auto_reconnect: bool, lang: Lang) {
+    /// nastaveni nedrzi, dostava ho pri kazdem vykresleni zvenci. Stejne
+    /// tak `font_size` (`AppSettings::term_font_size`, ovladane z
+    /// Nastaveni i z View menu +/-, viz `app.rs`).
+    pub fn render(&mut self, ui: &mut egui::Ui, auto_reconnect: bool, lang: Lang, font_size: f32) {
         self.pump();
         let tr = i18n::t(lang);
 
@@ -659,9 +679,9 @@ impl TerminalSession {
 
         // Az TED (po pripadnych hlaskach vyse, ktere uz zabraly kus
         // plochy tohoto snimku) - viz `resize_to_fit`.
-        self.resize_to_fit(ui);
+        self.resize_to_fit(ui, font_size);
 
-        let job = self.build_layout_job();
+        let job = self.build_layout_job(font_size);
         egui::ScrollArea::both().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
             ui.add(egui::Label::new(job).selectable(false));
         });
@@ -754,9 +774,9 @@ impl TerminalSession {
     /// po radcich, uvnitr radku po "behach" znaku se stejnou
     /// barvou popredi/pozadi (misto jednoho segmentu na kazdy jednotlivy
     /// znak, coz by bylo zbytecne pomale).
-    fn build_layout_job(&self) -> egui::text::LayoutJob {
+    fn build_layout_job(&self, font_size: f32) -> egui::text::LayoutJob {
         let mut job = egui::text::LayoutJob::default();
-        let font_id = terminal_font();
+        let font_id = terminal_font(font_size);
         let grid = self.term.grid();
         let cursor_point = grid.cursor.point;
 

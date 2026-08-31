@@ -97,6 +97,14 @@ pub struct Strings {
     pub btn_export_vault: &'static str,
     pub btn_import_vault: &'static str,
     pub btn_create_vault: &'static str,
+    /// Bublina na tlacitku pro SBALENI bociho panelu se stromem
+    /// serveru (`MainApp::show_tree`) - viz pozadavek "zobrazit/schovat
+    /// boční panel bych dal vpravo na řádek vedle +Složka".
+    pub btn_hide_sidebar: &'static str,
+    /// Bublina na tlacitku pro ROZBALENI bociho panelu, kdyz je prave
+    /// sbaleny na uzky pruh.
+    pub btn_show_sidebar: &'static str,
+    pub btn_check_updates: &'static str,
 
     // -- Home tab (`MainApp::render_home`) --
     pub home_heading: &'static str,
@@ -115,9 +123,21 @@ pub struct Strings {
     pub menu_sessions_new_folder: &'static str,
     pub menu_sessions_new_quick_connect: &'static str,
     pub menu_view: &'static str,
-    pub menu_tools: &'static str,
+    pub menu_view_font_increase: &'static str,
+    pub menu_view_font_decrease: &'static str,
+    pub menu_view_fullscreen: &'static str,
     pub menu_settings: &'static str,
+    /// Na rozdil od `menu_settings` uz neni rozklikavaci menu se
+    /// zanorenou "O programu" polozkou, ale primo tlacitko, ktere
+    /// otevre `show_about_dialog` - stejny vzor jako uz drive
+    /// `menu_settings` (viz pozadavek "V nastavení bychom nemuseli mít
+    /// podsložky... rovnou tlačítko" a nyni "místo nápovědy bych dal O
+    /// programu").
     pub menu_help: &'static str,
+
+    // -- dialog "O programu" (`MainApp::show_about_dialog`) --
+    pub about_dialog_title: &'static str,
+    pub about_github_link: &'static str,
 
     // -- taby (`MainApp::tab_title`) --
     pub tab_home: &'static str,
@@ -210,6 +230,11 @@ pub struct Strings {
     pub settings_appearance_heading: &'static str,
     pub settings_theme_label: &'static str,
     pub settings_theme_note: &'static str,
+    /// Popisek u ovladace velikosti pisma terminalu - viz pozadavek
+    /// "přidal bych velikost písma i do Nastavení" (stejna hodnota
+    /// jako `AppSettings::term_font_size`, sdilena i s
+    /// `menu_view_font_increase`/`_decrease`).
+    pub settings_font_size_label: &'static str,
     pub settings_language_heading: &'static str,
     pub settings_language_label: &'static str,
     pub settings_ssh_loss_heading: &'static str,
@@ -275,6 +300,9 @@ pub const CS: Strings = Strings {
     btn_export_vault: "Exportovat trezor...",
     btn_import_vault: "Importovat trezor...",
     btn_create_vault: "Vytvořit trezor",
+    btn_hide_sidebar: "Skrýt boční panel",
+    btn_show_sidebar: "Zobrazit boční panel",
+    btn_check_updates: "Zkontrolovat aktualizace",
 
     home_heading: "Připojit k novému serveru",
     home_save_checkbox: "Uložit server do trezoru",
@@ -292,9 +320,14 @@ pub const CS: Strings = Strings {
     menu_sessions_new_folder: "Nová složka...",
     menu_sessions_new_quick_connect: "Nové rychlé spojení...",
     menu_view: "Zobrazení",
-    menu_tools: "Nástroje",
+    menu_view_font_increase: "Zvětšit písmo terminálu",
+    menu_view_font_decrease: "Zmenšit písmo terminálu",
+    menu_view_fullscreen: "Celá obrazovka",
     menu_settings: "Nastavení",
     menu_help: "Nápověda",
+
+    about_dialog_title: "O programu",
+    about_github_link: "Zdrojový kód na GitHubu",
 
     tab_home: "Domů",
     tab_settings: "Nastavení",
@@ -376,6 +409,7 @@ pub const CS: Strings = Strings {
     settings_appearance_heading: "Vzhled",
     settings_theme_label: "Motiv:",
     settings_theme_note: "Zvolený vzhled se použije okamžitě a zůstane uložený i po restartu aplikace.",
+    settings_font_size_label: "Velikost písma terminálu:",
     settings_language_heading: "Jazyk aplikace",
     settings_language_label: "Jazyk:",
     settings_ssh_loss_heading: "Ztráta SSH spojení",
@@ -443,6 +477,9 @@ pub const EN: Strings = Strings {
     btn_export_vault: "Export vault...",
     btn_import_vault: "Import vault...",
     btn_create_vault: "Create vault",
+    btn_hide_sidebar: "Hide sidebar",
+    btn_show_sidebar: "Show sidebar",
+    btn_check_updates: "Check for updates",
 
     home_heading: "Connect to a new server",
     home_save_checkbox: "Save server to the vault",
@@ -460,9 +497,14 @@ pub const EN: Strings = Strings {
     menu_sessions_new_folder: "New folder...",
     menu_sessions_new_quick_connect: "New quick connection...",
     menu_view: "View",
-    menu_tools: "Tools",
+    menu_view_font_increase: "Increase terminal font size",
+    menu_view_font_decrease: "Decrease terminal font size",
+    menu_view_fullscreen: "Full screen",
     menu_settings: "Settings",
     menu_help: "Help",
+
+    about_dialog_title: "About",
+    about_github_link: "Source code on GitHub",
 
     tab_home: "Home",
     tab_settings: "Settings",
@@ -544,6 +586,7 @@ pub const EN: Strings = Strings {
     settings_appearance_heading: "Appearance",
     settings_theme_label: "Theme:",
     settings_theme_note: "The selected appearance applies immediately and is remembered after restarting the app.",
+    settings_font_size_label: "Terminal font size:",
     settings_language_heading: "Application language",
     settings_language_label: "Language:",
     settings_ssh_loss_heading: "SSH connection loss",
