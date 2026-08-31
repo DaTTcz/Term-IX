@@ -207,6 +207,7 @@ pub struct Strings {
     pub settings_heading: &'static str,
     pub settings_guest_note: &'static str,
     pub settings_vault_location: &'static str,
+    pub settings_appearance_heading: &'static str,
     pub settings_theme_note: &'static str,
     pub settings_language_heading: &'static str,
     pub settings_language_label: &'static str,
@@ -371,7 +372,8 @@ pub const CS: Strings = Strings {
                            se nečte ani nezapisuje. Pro přístup k uloženým serverům aplikaci restartujte \
                            a zadejte hlavní heslo.",
     settings_vault_location: "Umístění trezoru:",
-    settings_theme_note: "Vzhled: v této verzi je k dispozici jen 'terminálové' tmavé téma. \
+    settings_appearance_heading: "Vzhled",
+    settings_theme_note: "V této verzi je k dispozici jen 'terminálové' tmavé téma. \
                            Modernější téma přibude jako další volba zde.",
     settings_language_heading: "Jazyk aplikace",
     settings_language_label: "Jazyk:",
@@ -538,7 +540,8 @@ pub const EN: Strings = Strings {
                            read from or written to. To access saved servers, restart the app \
                            and enter the main password.",
     settings_vault_location: "Vault location:",
-    settings_theme_note: "Appearance: this version only offers the 'terminal-style' dark theme. \
+    settings_appearance_heading: "Appearance",
+    settings_theme_note: "This version only offers the 'terminal-style' dark theme. \
                            A more modern theme will be added as another option here.",
     settings_language_heading: "Application language",
     settings_language_label: "Language:",

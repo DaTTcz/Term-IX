@@ -1364,8 +1364,6 @@ impl MainApp {
             ui.add_space(12.0);
             self.render_change_password_section(ui);
         }
-        ui.add_space(12.0);
-        ui.label(tr.settings_theme_note);
 
         ui.add_space(18.0);
         ui.separator();
@@ -1387,6 +1385,17 @@ impl MainApp {
                     }
                 });
         });
+
+        // Vzhled/tema - zpetna vazba "to bych nedával pod heslo trezoru.
+        // ale v dalším oddíle asi pod jazyk" - puvodne to byl jen radek
+        // textu hned pod sekci zmeny hesla trezoru, ted vlastni oddil
+        // hned pod Jazykem (podobne jako ostatni sekce nize).
+        ui.add_space(18.0);
+        ui.separator();
+        ui.add_space(12.0);
+        ui.heading(tr.settings_appearance_heading);
+        ui.add_space(4.0);
+        ui.label(tr.settings_theme_note);
 
         ui.add_space(18.0);
         ui.separator();
