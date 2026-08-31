@@ -270,13 +270,22 @@ fn render_export_tree(
         let mut checked = selected_folders.contains(&full_path);
         let mut folder_toggled = false;
 
-        // Kdyz se hleda, slozka s vysledkem se rovnou rozbali - jinak
-        // (bezny prohlizeci rezim) zustava zavrena, dokud si ji uzivatel
-        // sam neotevre (stav se pak pamatuje v egui pameti podle `id`,
-        // stejne jako u hlavniho stromu v levem panelu).
-        let default_open = !filter_lower.is_empty();
+        // `default_open` u `load_with_default_open` plati POUZE pri
+        // prvnim vytvoreni stavu pro dane `id` - jakmile uz je pro tuto
+        // slozku neco ulozene v pameti (napr. z prvniho snimku, kdy byl
+        // filtr jeste prazdny a slozka se tedy vytvorila zavrena), dalsi
+        // volani se stavem uz jen `default_open` ignoruje. Proto se tu
+        // navic explicitne vola `set_open(true)`, kdyz se prave hleda a
+        // slozka obsahuje shodu - jinak by hledani vizualne "nic
+        // nedelalo", protoze uz jednou zavrena slozka by zustala zavrena
+        // i po zadani textu do filtru (presne tenhle bug uzivatel
+        // nahlasil).
         let id = ui.make_persistent_id(&full_path);
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open)
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+        if !filter_lower.is_empty() {
+            state.set_open(true);
+        }
+        state
             .show_header(ui, |ui| {
                 if ui.checkbox(&mut checked, "").changed() {
                     folder_toggled = true;

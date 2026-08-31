@@ -187,6 +187,15 @@ fn primary_screen_size() -> Option<(i32, i32)> {
     }
 }
 
+/// Polomer zaobleni rohu splash okna v pixelech - odvozeny od mensiho
+/// rozmeru okna, aby zaobleni vypadalo primerene i kdyby se
+/// `TARGET_MAX_DIM` v budoucnu zmenil (a ne jen jedno pevne cislo, ktere
+/// by u hodne maleho/velkeho okna vypadalo divne).
+#[cfg(target_os = "windows")]
+fn corner_radius(width: i32, height: i32) -> i32 {
+    (width.min(height) / 10).clamp(12, 32)
+}
+
 /// Na Windows nekdy `minifb`'s `borderless: true` + `title: false` (viz
 /// nastaveni okna nize) samo o sobe nestaci a titulkovy pruh zustane
 /// viditelny (potvrzeno screenshotem od uzivatele). Jako spolehlivejsi
@@ -199,6 +208,11 @@ fn primary_screen_size() -> Option<(i32, i32)> {
 /// je to spolehlivejsi nez puvodni `Window::set_position` z `minifb`,
 /// protoze `SetWindowPos` s `SWP_FRAMECHANGED` donuti Windows prepocitat
 /// ramecek podle noveho stylu ve stejnem kroku.
+///
+/// Navic se oknu (opet primo pres Win32, `CreateRoundRectRgn` +
+/// `SetWindowRgn`) nastavi zaobleny tvar - u ciste "popup" okna bez
+/// ramecku by jinak rohy zustaly ostre hranate, DWM zaobleni z Windows
+/// 11 se na takovyto typ okna samo neuplatni.
 #[cfg(target_os = "windows")]
 fn force_borderless_and_center(title: &str, width: i32, height: i32) {
     use std::ffi::c_void;
@@ -208,6 +222,11 @@ fn force_borderless_and_center(title: &str, width: i32, height: i32) {
         fn FindWindowW(lp_class_name: *const u16, lp_window_name: *const u16) -> *mut c_void;
         fn SetWindowLongPtrW(hwnd: *mut c_void, n_index: i32, dw_new_long: isize) -> isize;
         fn SetWindowPos(hwnd: *mut c_void, hwnd_insert_after: *mut c_void, x: i32, y: i32, cx: i32, cy: i32, u_flags: u32) -> i32;
+        fn SetWindowRgn(hwnd: *mut c_void, hrgn: *mut c_void, b_redraw: i32) -> i32;
+    }
+    #[link(name = "gdi32")]
+    extern "system" {
+        fn CreateRoundRectRgn(x1: i32, y1: i32, x2: i32, y2: i32, width_ellipse: i32, height_ellipse: i32) -> *mut c_void;
     }
 
     const GWL_STYLE: i32 = -16;
@@ -225,7 +244,8 @@ fn force_borderless_and_center(title: &str, width: i32, height: i32) {
             // Okno se nenaslo (napr. jina verze Windows hlasi titulek
             // jinak) - splash zustane zobrazeny aspon tak, jak ho
             // vytvorilo minifb samo, jen bez vycentrovani/tvrdeho
-            // borderless. Nikdy nesmi kvuli tomu spadnout cela aplikace.
+            // borderless/zaobleni. Nikdy nesmi kvuli tomu spadnout cela
+            // aplikace.
             return;
         }
 
@@ -236,6 +256,18 @@ fn force_borderless_and_center(title: &str, width: i32, height: i32) {
             None => (0, 0),
         };
         SetWindowPos(hwnd, std::ptr::null_mut(), x, y, width, height, SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+
+        // Zaobleny tvar okna: region v souradnicich okna samotneho
+        // (0,0) az (width,height), +1 na kazde strane, aby zaobleny
+        // obdelnik pokryl uplne cely klientsky prostor az do kraje.
+        // Vlastnictvi `region` handle po uspesnem `SetWindowRgn` prebira
+        // system (uvolni ho sam pri zavreni okna) - `DeleteObject` volat
+        // NESMI, jinak by system pracoval s uz uvolnenym handle.
+        let radius = corner_radius(width, height);
+        let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius, radius);
+        if !region.is_null() {
+            SetWindowRgn(hwnd, region, 1);
+        }
     }
 }
 
