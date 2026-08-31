@@ -127,6 +127,13 @@ struct NewSessionForm {
     port: String,
     username: String,
     password: String,
+    /// `false` jen do prvniho vykresleni tohoto dialogu - pak se pole
+    /// "Název:" samo fokusne, aby slo rovnou psat bez nutnosti tam
+    /// nejdriv kliknout (viz pozadavek "+server , + složka, vyskakovacímu
+    /// oknu bychom měli dát fokus na první okénko ať můžeme rovnou
+    /// začít psát"). Stejny vzor jako uz drive `LockScreen::focus_requested`/
+    /// `GuestLoginForm::focus_requested`.
+    focus_requested: bool,
 }
 
 impl Default for NewSessionForm {
@@ -138,6 +145,7 @@ impl Default for NewSessionForm {
             port: "22".to_string(),
             username: String::new(),
             password: String::new(),
+            focus_requested: false,
         }
     }
 }
@@ -156,6 +164,9 @@ struct EditSessionForm {
     port: String,
     username: String,
     password: String,
+    /// Viz `NewSessionForm::focus_requested` - stejny ucel (fokus na
+    /// pole "Název:" hned pri otevreni dialogu).
+    focus_requested: bool,
 }
 
 impl EditSessionForm {
@@ -177,6 +188,7 @@ impl EditSessionForm {
             port: session.port.to_string(),
             username,
             password,
+            focus_requested: false,
         }
     }
 }
@@ -193,6 +205,8 @@ struct QuickConnectForm {
     port: String,
     username: String,
     password: String,
+    /// Viz `NewSessionForm::focus_requested`.
+    focus_requested: bool,
 }
 
 impl Default for QuickConnectForm {
@@ -203,6 +217,7 @@ impl Default for QuickConnectForm {
             port: "22".to_string(),
             username: String::new(),
             password: String::new(),
+            focus_requested: false,
         }
     }
 }
@@ -277,6 +292,28 @@ struct RenameDialog {
 struct MoveDialog {
     session_id: Uuid,
     value: String,
+}
+
+/// Rozpracovany stav dialogu "Nová složka" (viz `show_new_folder_dialog`).
+/// Puvodne slo jen o holy `Option<String>` - rozsireno o `focus_requested`
+/// (viz `NewSessionForm::focus_requested`), protoze i tento jednopolovy
+/// dialog se ma pri otevreni sam fokusnout ("+server , + složka,
+/// vyskakovacímu oknu bychom měli dát fokus na první okénko"). Tento
+/// dialog navic (na rozdil od vicepolovych New/Edit server dialogu, kde
+/// by Enter kolidoval s tim, ze uzivatel muze chtit Tabem/Enterem
+/// prochazet vice poli) podporuje Enter = vytvorit, Esc = zrusit primo
+/// (viz `field_matches`/pozadavek "Složka má jen jedno pole, tam můžeme
+/// Enterem uložit esc vyskočit"), stejny vzor jako uz drive
+/// `show_close_tab_confirm`.
+struct NewFolderDialog {
+    value: String,
+    focus_requested: bool,
+}
+
+impl NewFolderDialog {
+    fn new() -> Self {
+        Self { value: String::new(), focus_requested: false }
+    }
 }
 
 enum DeleteTarget {
@@ -614,8 +651,14 @@ fn render_suggestion_chips(ui: &mut egui::Ui, value: &mut String, matches: &[Str
 /// neni co nabidnout (typicky prave DIKY tomu, ze kliknuti hodnotu
 /// pole prepsalo na presne tu navrhovanou, ktera uz se sama sobe
 /// nenabizi - viz `field_matches`).
-fn grid_field_with_suggestions(ui: &mut egui::Ui, value: &mut String, known: &[String]) {
-    ui.text_edit_singleline(value);
+///
+/// Vraci `Response` samotneho textoveho pole (ne napovedy pod nim) -
+/// volajici si na ni muze zavolat `.request_focus()`, pokud potrebuje
+/// pole hned pri otevreni dialogu predfokusit (viz pozadavek
+/// "vyskakovacímu oknu bychom měli dát fokus na první okénko ať můžeme
+/// rovnou začít psát").
+fn grid_field_with_suggestions(ui: &mut egui::Ui, value: &mut String, known: &[String]) -> egui::Response {
+    let resp = ui.text_edit_singleline(value);
     ui.end_row();
     let matches = field_matches(known, value);
     if !matches.is_empty() {
@@ -623,6 +666,7 @@ fn grid_field_with_suggestions(ui: &mut egui::Ui, value: &mut String, known: &[S
         render_suggestion_chips(ui, value, &matches);
         ui.end_row();
     }
+    resp
 }
 
 /// Cela aplikace PO uspesnem odemceni/vytvoreni trezoru (nebo po
@@ -666,7 +710,7 @@ struct MainApp {
     new_session_form: Option<NewSessionForm>,
     /// Editace jiz ulozeneho serveru - viz [`EditSessionForm`].
     edit_session_form: Option<EditSessionForm>,
-    new_folder_dialog: Option<String>,
+    new_folder_dialog: Option<NewFolderDialog>,
     rename_dialog: Option<RenameDialog>,
     move_dialog: Option<MoveDialog>,
     delete_confirm: Option<DeleteTarget>,
@@ -1407,7 +1451,7 @@ impl MainApp {
                         }
                         if ui.button(tr.menu_sessions_new_folder).clicked() {
                             self.close_all_dialogs();
-                            self.new_folder_dialog = Some(String::new());
+                            self.new_folder_dialog = Some(NewFolderDialog::new());
                             ui.close_menu();
                         }
                         ui.separator();
@@ -1458,7 +1502,11 @@ impl MainApp {
             .show(ctx, |ui| {
                 egui::Grid::new("new_session_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label(tr.field_name);
-                    grid_field_with_suggestions(ui, &mut form.name, &known_names);
+                    let name_resp = grid_field_with_suggestions(ui, &mut form.name, &known_names);
+                    if !form.focus_requested {
+                        name_resp.request_focus();
+                        form.focus_requested = true;
+                    }
 
                     ui.label(tr.field_folder);
                     grid_field_with_suggestions(ui, &mut form.folder, &known_folders);
@@ -1541,7 +1589,11 @@ impl MainApp {
             .show(ctx, |ui| {
                 egui::Grid::new("edit_session_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label(tr.field_name);
-                    grid_field_with_suggestions(ui, &mut form.name, &known_names);
+                    let name_resp = grid_field_with_suggestions(ui, &mut form.name, &known_names);
+                    if !form.focus_requested {
+                        name_resp.request_focus();
+                        form.focus_requested = true;
+                    }
 
                     ui.label(tr.field_folder);
                     grid_field_with_suggestions(ui, &mut form.folder, &known_folders);
@@ -1605,10 +1657,13 @@ impl MainApp {
     }
 
     fn show_new_folder_dialog(&mut self, ctx: &egui::Context) {
-        let Some(mut value) = self.new_folder_dialog.take() else { return };
+        let Some(mut dialog) = self.new_folder_dialog.take() else { return };
         let mut open = true;
         let mut confirmed = false;
-        let mut cancel = false;
+        // Esc = zrusit - cteno primo z `ctx`, protoze v tomto dialogu
+        // neni jine textove pole ani tlacitko, ktere by na Esc melo
+        // vlastni vyznam (stejny vzor jako `show_close_tab_confirm`).
+        let mut cancel = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let tr = i18n::t(self.settings.lang);
         let known_folders = self.known_folder_paths();
 
@@ -1618,10 +1673,22 @@ impl MainApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label(tr.new_folder_path_hint);
-                ui.text_edit_singleline(&mut value);
-                let matches = field_matches(&known_folders, &value);
+                let value_resp = ui.text_edit_singleline(&mut dialog.value);
+                // Viz `NewSessionForm::focus_requested` - fokus na jedine
+                // pole tohoto dialogu hned pri otevreni.
+                if !dialog.focus_requested {
+                    value_resp.request_focus();
+                }
+                dialog.focus_requested = true;
+                // Enter = vytvorit - jelikoz je v dialogu jen jedno pole,
+                // Enter v nem jednoznacne znamena "hotovo" (viz pozadavek
+                // "Složka má jen jedno pole, tam můžeme Enterem uložit").
+                if value_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    confirmed = true;
+                }
+                let matches = field_matches(&known_folders, &dialog.value);
                 if !matches.is_empty() {
-                    render_suggestion_chips(ui, &mut value, &matches);
+                    render_suggestion_chips(ui, &mut dialog.value, &matches);
                 }
                 ui.horizontal(|ui| {
                     if ui.button(tr.btn_create).clicked() {
@@ -1638,13 +1705,13 @@ impl MainApp {
         }
 
         if confirmed {
-            let trimmed = value.trim().to_string();
+            let trimmed = dialog.value.trim().to_string();
             if !trimmed.is_empty() && !self.vault.data.folders.contains(&trimmed) {
                 self.vault.data.folders.push(trimmed);
                 self.save_vault();
             }
         } else if open {
-            self.new_folder_dialog = Some(value);
+            self.new_folder_dialog = Some(dialog);
         }
     }
 
@@ -1932,7 +1999,11 @@ impl MainApp {
             .show(ctx, |ui| {
                 egui::Grid::new("quick_connect_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label(tr.field_name);
-                    grid_field_with_suggestions(ui, &mut form.name, &known_names);
+                    let name_resp = grid_field_with_suggestions(ui, &mut form.name, &known_names);
+                    if !form.focus_requested {
+                        name_resp.request_focus();
+                        form.focus_requested = true;
+                    }
 
                     ui.label(tr.field_host);
                     grid_field_with_suggestions(ui, &mut form.host, &known_hosts);
@@ -2280,7 +2351,7 @@ impl MainApp {
             }
             if ui.button(tr.btn_new_folder).clicked() {
                 self.close_all_dialogs();
-                self.new_folder_dialog = Some(String::new());
+                self.new_folder_dialog = Some(NewFolderDialog::new());
             }
         });
         ui.separator();
