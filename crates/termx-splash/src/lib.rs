@@ -32,8 +32,12 @@ const FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/DejaVuSansMono-B
 /// Kolik milisekund trva "napsani" jednoho znaku.
 const TYPE_INTERVAL_MS: u128 = 32;
 /// Pauza mezi prvnim (verze) a druhym (autor) radkem - jako novy radek
-/// v terminalu, kdyz uzivatel na chvili zastavi.
-const LINE_PAUSE_MS: u128 = 220;
+/// v terminalu, kdyz uzivatel na chvili zastavi. Zamerne kratka - je to
+/// jediny usek celeho zobrazeni, kdy je videt jen prvni radek (druhy
+/// jeste nezacal), takze cim kratsi pauza, tim mensi sance, ze prave v
+/// tomto kratkem okamziku nekdo stihne udelat screenshot/mrknout a
+/// bude si myslet, ze se autor "ztratil".
+const LINE_PAUSE_MS: u128 = 100;
 /// Jak dlouho jeste zustane okno otevrene po dopsani textu (kurzor
 /// mezitim par-krat blikne), nez se samo zavre - dost casu, aby si
 /// clovek stihl precist verzi/autora.
@@ -163,11 +167,10 @@ fn blend_pixel(buffer: &mut [u32], img_w: usize, x: usize, y: usize, color_rgb: 
     buffer[idx] = (nr << 16) | (ng << 8) | nb;
 }
 
-/// Rozmery hlavni obrazovky (primarniho monitoru) ve fyzickych pixelech,
-/// pro rucni vycentrovani splash okna - viz `try_show_splash`. Stejny
-/// zpusob (primy Win32 FFI dotaz) jako `set_process_dpi_aware` v
-/// `main.rs`, aby se kvuli jedne funkci nemusela pridavat dalsi
-/// nazavislost (`winapi`/`windows` crate).
+/// Rozmery hlavni obrazovky (primarniho monitoru) ve fyzickych pixelech -
+/// viz `force_borderless_and_center`. Stejny zpusob (primy Win32 FFI
+/// dotaz) jako `set_process_dpi_aware` v `main.rs`, aby se kvuli jedne
+/// funkci nemusela pridavat dalsi zavislost (`winapi`/`windows` crate).
 #[cfg(target_os = "windows")]
 fn primary_screen_size() -> Option<(i32, i32)> {
     #[link(name = "user32")]
@@ -181,6 +184,58 @@ fn primary_screen_size() -> Option<(i32, i32)> {
         Some((w, h))
     } else {
         None
+    }
+}
+
+/// Na Windows nekdy `minifb`'s `borderless: true` + `title: false` (viz
+/// nastaveni okna nize) samo o sobe nestaci a titulkovy pruh zustane
+/// viditelny (potvrzeno screenshotem od uzivatele). Jako spolehlivejsi
+/// pojistka se okno hned po vytvoreni jeste najde podle sveho titulku
+/// pres primy Win32 dotaz (`FindWindowW`) a jeho styl se natvrdo
+/// prepne na `WS_POPUP` (cisty "popup" bez jakehokoliv systemoveho
+/// ramecku/titulku) - stejny pristup (primy FFI, zadna dalsi
+/// zavislost) jako `set_process_dpi_aware` v `main.rs`. Stejnym
+/// volanim (`SetWindowPos`) se zaroven okno vycentruje na obrazovce -
+/// je to spolehlivejsi nez puvodni `Window::set_position` z `minifb`,
+/// protoze `SetWindowPos` s `SWP_FRAMECHANGED` donuti Windows prepocitat
+/// ramecek podle noveho stylu ve stejnem kroku.
+#[cfg(target_os = "windows")]
+fn force_borderless_and_center(title: &str, width: i32, height: i32) {
+    use std::ffi::c_void;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn FindWindowW(lp_class_name: *const u16, lp_window_name: *const u16) -> *mut c_void;
+        fn SetWindowLongPtrW(hwnd: *mut c_void, n_index: i32, dw_new_long: isize) -> isize;
+        fn SetWindowPos(hwnd: *mut c_void, hwnd_insert_after: *mut c_void, x: i32, y: i32, cx: i32, cy: i32, u_flags: u32) -> i32;
+    }
+
+    const GWL_STYLE: i32 = -16;
+    const WS_POPUP: isize = 0x8000_0000_u32 as i32 as isize;
+    const WS_VISIBLE: isize = 0x1000_0000;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const SWP_SHOWWINDOW: u32 = 0x0040;
+
+    let wide_title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), wide_title.as_ptr());
+        if hwnd.is_null() {
+            // Okno se nenaslo (napr. jina verze Windows hlasi titulek
+            // jinak) - splash zustane zobrazeny aspon tak, jak ho
+            // vytvorilo minifb samo, jen bez vycentrovani/tvrdeho
+            // borderless. Nikdy nesmi kvuli tomu spadnout cela aplikace.
+            return;
+        }
+
+        SetWindowLongPtrW(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+
+        let (x, y) = match primary_screen_size() {
+            Some((screen_w, screen_h)) => (((screen_w - width) / 2).max(0), ((screen_h - height) / 2).max(0)),
+            None => (0, 0),
+        };
+        SetWindowPos(hwnd, std::ptr::null_mut(), x, y, width, height, SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
     }
 }
 
@@ -248,18 +303,12 @@ fn try_show_splash(info: &SplashInfo) -> anyhow::Result<()> {
         },
     )?;
 
-    // Vycentrovat okno na obrazovce - minifb samo o sobe zadnou
-    // "centered" volbu nema, takze na Windows pozici dopocitame rucne
-    // (stejny pristup jako DPI-awareness v main.rs: primy Win32 FFI
-    // volani, zadna dalsi zavislost). Na jinych platformach necha
-    // aplikace umisteni na okennim manageru - neni to regrese, drive
-    // se poloha neresila vubec.
+    // Na Windows natvrdo zajistit borderless (viz komentar u funkce) a
+    // vycentrovat na obrazovce. Na jinych platformach necha aplikace
+    // umisteni na okennim manageru - `borderless`/`title` z
+    // `WindowOptions` vyse tam plati primo.
     #[cfg(target_os = "windows")]
-    if let Some((screen_w, screen_h)) = primary_screen_size() {
-        let x = ((screen_w - width as i32) / 2).max(0);
-        let y = ((screen_h - height as i32) / 2).max(0);
-        window.set_position(x as isize, y as isize);
-    }
+    force_borderless_and_center("Term-IX", width as i32, height as i32);
 
     let start = Instant::now();
 
