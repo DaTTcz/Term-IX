@@ -120,6 +120,10 @@ struct ExportDialog {
     error: Option<String>,
     selected_sessions: std::collections::HashSet<Uuid>,
     selected_folders: std::collections::HashSet<String>,
+    /// Textovy filtr pro strom vyberu (hleda v nazvu serveru/hostu a v
+    /// nazvech slozek) - u velkych trezoru (stovky serveru) je bez neho
+    /// strom nepouzitelny, viz `render_export_tree`.
+    filter: String,
 }
 
 impl ExportDialog {
@@ -131,6 +135,7 @@ impl ExportDialog {
             error: None,
             selected_sessions: data.servers.iter().map(|s| s.id).collect(),
             selected_folders: data.folders.iter().cloned().collect(),
+            filter: String::new(),
         }
     }
 }
@@ -194,25 +199,95 @@ fn build_tree(data: &VaultData) -> FolderNode {
     root
 }
 
+/// `true`, pokud dany server odpovida (case-insensitive) filtru - podle
+/// nazvu nebo hostu. Prazdny filtr odpovida vzdy.
+fn session_matches_filter(session: &Session, filter_lower: &str) -> bool {
+    filter_lower.is_empty() || session.name.to_lowercase().contains(filter_lower) || session.host.to_lowercase().contains(filter_lower)
+}
+
+/// `true`, pokud samotny nazev slozky, nebo cokoliv pod ni (server,
+/// podslozka), odpovida filtru - pouziva se k rozhodnuti, jestli se
+/// slozka v prohledavanem strome vubec ma zobrazit.
+fn node_matches_filter(node: &FolderNode, name: &str, data: &VaultData, filter_lower: &str) -> bool {
+    if filter_lower.is_empty() {
+        return true;
+    }
+    if name.to_lowercase().contains(filter_lower) {
+        return true;
+    }
+    if node.session_ids.iter().any(|id| data.servers.iter().find(|s| s.id == *id).is_some_and(|s| session_matches_filter(s, filter_lower))) {
+        return true;
+    }
+    node.children.iter().any(|(cname, child)| node_matches_filter(child, cname, data, filter_lower))
+}
+
+/// Celkovy pocet serveru pod danym uzlem a kolik z nich je zrovna
+/// vybranych - zobrazuje se jako "(vybráno/celkem)" u kazde slozky, aby
+/// bylo u velkych trezoru na prvni pohled videt stav vyberu i bez
+/// rozbalovani.
+fn count_selection(node: &FolderNode, selected_sessions: &std::collections::HashSet<Uuid>) -> (usize, usize) {
+    let mut total = node.session_ids.len();
+    let mut selected = node.session_ids.iter().filter(|id| selected_sessions.contains(*id)).count();
+    for child in node.children.values() {
+        let (t, s) = count_selection(child, selected_sessions);
+        total += t;
+        selected += s;
+    }
+    (total, selected)
+}
+
 /// Vykresli strom slozek/serveru se zaskrtavatky pro vyber exportu
 /// (viz [`ExportDialog`]). Volna funkce misto metody `MainApp` zamerne -
 /// pracuje jen s daty ze snapshotu `tree`/`data`, ktery uz je vytvoren
 /// pred `.show()`, takze uvnitr UI closure nehrozi zadny konflikt s
 /// pujckou `self` (stejny druh problemu, kvuli kteremu byly drive
 /// opraveny E0499 chyby u ostatnich dialogu).
+///
+/// U velkych trezoru (stovky serveru) by plochy seznam se vsemi
+/// zaskrtavatky najednou rozbalenymi byl nepouzitelny, proto:
+/// - slozky jsou sbalovaci (`CollapsingHeader`/`CollapsingState`),
+///   vychozi stav ZAVRENO - dokud uzivatel nehleda, vidi jen nejvyssi
+///   uroven a nemusi prochazet stovky radku;
+/// - textovy filtr (`filter`) automaticky rozbali jen ty slozky, ve
+///   kterych neco odpovida, a schova ostatni;
+/// - u kazde slozky je videt pocet vybranych ze vsech pod ni, i kdyz je
+///   zrovna zavrena.
 fn render_export_tree(
     ui: &mut egui::Ui,
     node: &FolderNode,
     path_prefix: &str,
     data: &VaultData,
+    filter_lower: &str,
     selected_sessions: &mut std::collections::HashSet<Uuid>,
     selected_folders: &mut std::collections::HashSet<String>,
 ) {
     for (name, child) in &node.children {
+        if !node_matches_filter(child, name, data, filter_lower) {
+            continue;
+        }
         let full_path = if path_prefix.is_empty() { name.clone() } else { format!("{path_prefix}/{name}") };
+        let (total, selected_count) = count_selection(child, selected_sessions);
         let mut checked = selected_folders.contains(&full_path);
-        let changed = ui.checkbox(&mut checked, format!("📁 {name}")).changed();
-        if changed {
+        let mut folder_toggled = false;
+
+        // Kdyz se hleda, slozka s vysledkem se rovnou rozbali - jinak
+        // (bezny prohlizeci rezim) zustava zavrena, dokud si ji uzivatel
+        // sam neotevre (stav se pak pamatuje v egui pameti podle `id`,
+        // stejne jako u hlavniho stromu v levem panelu).
+        let default_open = !filter_lower.is_empty();
+        let id = ui.make_persistent_id(&full_path);
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open)
+            .show_header(ui, |ui| {
+                if ui.checkbox(&mut checked, "").changed() {
+                    folder_toggled = true;
+                }
+                ui.label(format!("📁 {name} ({selected_count}/{total})"));
+            })
+            .body(|ui| {
+                render_export_tree(ui, child, &full_path, data, filter_lower, selected_sessions, selected_folders);
+            });
+
+        if folder_toggled {
             set_subtree_selected(child, checked, selected_sessions, selected_folders, &full_path);
             if checked {
                 selected_folders.insert(full_path.clone());
@@ -220,13 +295,13 @@ fn render_export_tree(
                 selected_folders.remove(&full_path);
             }
         }
-        ui.indent(full_path.clone(), |ui| {
-            render_export_tree(ui, child, &full_path, data, selected_sessions, selected_folders);
-        });
     }
 
     for &id in &node.session_ids {
         if let Some(session) = data.servers.iter().find(|s| s.id == id) {
+            if !session_matches_filter(session, filter_lower) {
+                continue;
+            }
             let mut checked = selected_sessions.contains(&id);
             if ui.checkbox(&mut checked, &session.name).changed() {
                 if checked {
@@ -1025,10 +1100,14 @@ impl MainApp {
         egui::Window::new("Exportovat trezor")
             .collapsible(false)
             .resizable(true)
+            .default_width(440.0)
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label("Co exportovat:");
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("🔍");
+                    ui.add(egui::TextEdit::singleline(&mut dialog.filter).desired_width(160.0))
+                        .on_hover_text("Hledat podle názvu serveru, hostu nebo složky");
                     if ui.button("Vybrat vše").clicked() {
                         select_all = true;
                     }
@@ -1036,16 +1115,19 @@ impl MainApp {
                         select_none = true;
                     }
                 });
+                ui.add_space(4.0);
                 ui.group(|ui| {
-                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
                         if tree.children.is_empty() && tree.session_ids.is_empty() {
                             ui.label(egui::RichText::new("Trezor je prázdný - není co exportovat.").small());
                         } else {
+                            let filter_lower = dialog.filter.trim().to_lowercase();
                             render_export_tree(
                                 ui,
                                 &tree,
                                 "",
                                 &self.vault.data,
+                                &filter_lower,
                                 &mut dialog.selected_sessions,
                                 &mut dialog.selected_folders,
                             );
