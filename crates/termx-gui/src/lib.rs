@@ -13,14 +13,15 @@
 //! nejlepsiho vedomi pro verzi ~0.29, ale drobne nazvy metod se mohou
 //! po prvnim buildu lisit.
 //!
-//! DULEZITY ROZSAH TETO VERZE: tab spojeni (`TabKind::Connection`) je
-//! zatim JEN NAHRADNI OBRAZOVKA - ukazuje udaje o serveru, ale
-//! nepripojuje se. Skutecny vestaveny emulator terminalu (bez
-//! nativniho OS okna, pres `alacritty_terminal`) je navazujici krok,
-//! ktery se napoji na `termx_core::ProtocolModule` (tedy i na
-//! `termx-ssh`) misto puvodniho prevzeti stdin/stdout.
+//! Tab spojeni (`TabKind::Connection`) ma vestaveny emulator terminalu
+//! (`alacritty_terminal`, viz `terminal.rs`) napojeny primo na
+//! `termx_ssh::spawn_ssh_session` (ne na obecny `termx_core::ProtocolModule::run`,
+//! ktery pocita s puvodnim prevzetim stdin/stdout - viz poznamka tam) -
+//! zatim jen pro SSH, dalsi protokoly (Serial/FTP/...) budou potrebovat
+//! obdobnou specializovanou cestu, az pribudou.
 
 mod app;
+mod terminal;
 mod theme;
 
 use std::path::PathBuf;

@@ -25,6 +25,7 @@ use termx_update::LatestRelease;
 use termx_vault::{Vault, VaultData};
 use uuid::Uuid;
 
+use crate::terminal;
 use crate::theme;
 
 /// Stejne logo jako u ikony aplikace (`lib.rs`) - zvlast nacteno i zde,
@@ -424,6 +425,14 @@ struct MainApp {
     tabs: Vec<TabKind>,
     active_tab: usize,
 
+    /// Bezici vestavene terminaly (viz `terminal.rs`) pro otevrene
+    /// Connection taby - klic je id session. Zaznam se zaklada lene,
+    /// az pri prvnim vykresleni daneho tabu (`render_connection`), a
+    /// odstranuje se pri zavreni tabu/smazani serveru (`close_tab`,
+    /// `apply_tree_action`) - zahozenim se cistě ukonci i prislusne
+    /// pozadi bezici SSH vlakno (viz `termx_ssh::spawn_ssh_session`).
+    terminal_sessions: std::collections::HashMap<Uuid, terminal::TerminalSession>,
+
     new_session_form: Option<NewSessionForm>,
     new_folder_dialog: Option<String>,
     rename_dialog: Option<RenameDialog>,
@@ -459,6 +468,7 @@ impl MainApp {
             ad_hoc_sessions: Vec::new(),
             tabs: vec![TabKind::Home],
             active_tab: 0,
+            terminal_sessions: std::collections::HashMap::new(),
             new_session_form: None,
             new_folder_dialog: None,
             rename_dialog: None,
@@ -490,6 +500,7 @@ impl MainApp {
             ad_hoc_sessions: Vec::new(),
             tabs: vec![TabKind::Home],
             active_tab: 0,
+            terminal_sessions: std::collections::HashMap::new(),
             new_session_form: None,
             new_folder_dialog: None,
             rename_dialog: None,
@@ -568,6 +579,12 @@ impl MainApp {
     fn close_tab(&mut self, idx: usize) {
         if idx >= self.tabs.len() || matches!(self.tabs[idx], TabKind::Home) {
             return;
+        }
+        // Zavreni tabu ukonci i prislusny bezici terminal (zahozenim
+        // `input_tx` uvnitr `TerminalSession` se cistě ukonci pozadi
+        // bezici SSH vlakno - viz `termx_ssh::spawn_ssh_session`).
+        if let TabKind::Connection(id) = self.tabs[idx] {
+            self.terminal_sessions.remove(&id);
         }
         self.tabs.remove(idx);
         if self.tabs.is_empty() {
@@ -767,16 +784,32 @@ impl MainApp {
     }
 
     fn render_connection(&mut self, ui: &mut egui::Ui, id: Uuid) {
-        let Some(session) = self.find_session(id) else {
+        // `.cloned()` zamerne - `find_session` pujcuje `self` jako celek,
+        // takze kdybychom si `session` drzeli jen jako referenci, nesel
+        // by hned pod tim pouzit `self.terminal_sessions` (mutable
+        // pujcka `self`) - stejny druh problemu, jaky uz byl v tomto
+        // souboru drive opraven u dialogovych oken. `Session` je levne
+        // klonovatelna (`derive(Clone)` v termx-core).
+        let Some(session) = self.find_session(id).cloned() else {
             ui.label("Tento server už neexistuje (byl smazán nebo šlo o dočasné rychlé spojení, které skončilo se zavřením tabu).");
             return;
         };
 
-        ui.heading(&session.name);
-        ui.label(format!("{} — {}:{}", session.protocol, session.host, session.port));
-        ui.add_space(16.0);
-        ui.label("Vestavěný terminál zatím není připojený — toto je zatím jen informační záložka.");
-        ui.label("Skutečné spojení (bez nativního okna OS, přímo v tomto tabu) je navazující krok.");
+        if session.protocol != Protocol::Ssh {
+            ui.heading(&session.name);
+            ui.add_space(8.0);
+            ui.label(format!(
+                "Protokol {} zatím nemá vestavěný terminál - podporováno je prozatím jen SSH.",
+                session.protocol
+            ));
+            return;
+        }
+
+        self.terminal_sessions.entry(id).or_insert_with(|| terminal::TerminalSession::new(&session));
+
+        if let Some(term_session) = self.terminal_sessions.get_mut(&id) {
+            term_session.render(ui);
+        }
     }
 
     // -- horni menu -----------------------------------------------------
@@ -1072,6 +1105,7 @@ impl MainApp {
                 DeleteTarget::Session(id) => {
                     self.vault.data.servers.retain(|s| s.id != *id);
                     self.tabs.retain(|t| !matches!(t, TabKind::Connection(sid) if sid == id));
+                    self.terminal_sessions.remove(id);
                     if self.active_tab >= self.tabs.len() {
                         self.active_tab = self.tabs.len().saturating_sub(1);
                     }

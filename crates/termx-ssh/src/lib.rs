@@ -21,6 +21,7 @@
 //! pouzitim na produkcnich/verejnych serverech je potreba doplnit.
 
 mod handler;
+mod session;
 
 use std::sync::Arc;
 
@@ -29,6 +30,8 @@ use termx_core::{AuthMethod, ConnectionContext, CoreError, ProtocolModule};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use handler::TofuHandler;
+
+pub use session::{spawn_ssh_session, SshEvent, SshHandle, SshInput};
 
 #[derive(Default)]
 pub struct SshModule;

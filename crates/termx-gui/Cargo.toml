@@ -14,6 +14,9 @@ termx-vault = { workspace = true }
 # tabu - viz `termx_update::check_latest_version` volane na
 # samostatnem vlakne z `app.rs`.
 termx-update = { workspace = true }
+# Skutecne SSH spojeni (`termx_ssh::spawn_ssh_session`) pro Connection
+# tab - viz `terminal.rs`.
+termx-ssh = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
@@ -23,3 +26,11 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Nativni "Ulozit jako.../Otevrit soubor..." dialog pro export/import
 # trezoru (tlacitko "Prochazet..." v prislusnych dialozich v app.rs).
 rfd = { workspace = true }
+# Jen kvuli typu `tokio::sync::mpsc::UnboundedSender` pouzivanemu pro
+# odesilani klavesoveho vstupu do bezici SSH relace (viz `terminal.rs`
+# a `termx_ssh::SshHandle`) - zadny tokio runtime si `termx-gui` sam
+# nezaklada, `UnboundedSender::send` je bezna (ne-asynchronni) metoda.
+tokio = { workspace = true }
+# Vestaveny terminalovy emulator (VT100/ANSI parser + mrizka znaku) -
+# viz `terminal.rs`.
+alacritty_terminal = { workspace = true }
