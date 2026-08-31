@@ -109,7 +109,16 @@ impl Vault {
     /// souboru, volitelne chraneneho jinym heslem nez ma hlavni trezor
     /// (napr. pro predani spolupracovnikovi).
     pub fn export(&self, dest_path: impl AsRef<std::path::Path>, export_password: &str) -> Result<()> {
-        let plaintext = serde_json::to_vec(&self.data)?;
+        Self::export_data(&self.data, dest_path, export_password)
+    }
+
+    /// Stejne jako [`Vault::export`], ale exportuje libovolna predana
+    /// data (napr. jen podmnozinu serveru/slozek, ktere si uzivatel
+    /// vybral v GUI), ne nutne cely aktualni obsah trezoru
+    /// (`self.data`). Asociovana funkce (ne metoda) prave proto, aby
+    /// slo exportovat i vyber, ktery se od `self.data` lisi.
+    pub fn export_data(data: &VaultData, dest_path: impl AsRef<std::path::Path>, export_password: &str) -> Result<()> {
+        let plaintext = serde_json::to_vec(data)?;
         let raw = file::encrypt_file(&plaintext, export_password)?;
         std::fs::write(dest_path, raw)?;
         Ok(())

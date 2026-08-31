@@ -109,12 +109,30 @@ struct ChangePasswordDialog {
     error: Option<String>,
 }
 
-#[derive(Default)]
+/// Vyber toho, co se ma exportovat - ktere slozky (jejich cesty) a ktere
+/// jednotlive servery (jejich id). Vychozi stav (viz [`ExportDialog::new`])
+/// ma vybrane uplne vsechno, takze kdo si vyberem nechce zabyvat, dostane
+/// puvodni chovani (export celeho trezoru) beze zmeny.
 struct ExportDialog {
     path: String,
     password: String,
     confirm: String,
     error: Option<String>,
+    selected_sessions: std::collections::HashSet<Uuid>,
+    selected_folders: std::collections::HashSet<String>,
+}
+
+impl ExportDialog {
+    fn new(data: &VaultData) -> Self {
+        Self {
+            path: String::new(),
+            password: String::new(),
+            confirm: String::new(),
+            error: None,
+            selected_sessions: data.servers.iter().map(|s| s.id).collect(),
+            selected_folders: data.folders.iter().cloned().collect(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -174,6 +192,85 @@ fn build_tree(data: &VaultData) -> FolderNode {
         }
     }
     root
+}
+
+/// Vykresli strom slozek/serveru se zaskrtavatky pro vyber exportu
+/// (viz [`ExportDialog`]). Volna funkce misto metody `MainApp` zamerne -
+/// pracuje jen s daty ze snapshotu `tree`/`data`, ktery uz je vytvoren
+/// pred `.show()`, takze uvnitr UI closure nehrozi zadny konflikt s
+/// pujckou `self` (stejny druh problemu, kvuli kteremu byly drive
+/// opraveny E0499 chyby u ostatnich dialogu).
+fn render_export_tree(
+    ui: &mut egui::Ui,
+    node: &FolderNode,
+    path_prefix: &str,
+    data: &VaultData,
+    selected_sessions: &mut std::collections::HashSet<Uuid>,
+    selected_folders: &mut std::collections::HashSet<String>,
+) {
+    for (name, child) in &node.children {
+        let full_path = if path_prefix.is_empty() { name.clone() } else { format!("{path_prefix}/{name}") };
+        let mut checked = selected_folders.contains(&full_path);
+        let changed = ui.checkbox(&mut checked, format!("📁 {name}")).changed();
+        if changed {
+            set_subtree_selected(child, checked, selected_sessions, selected_folders, &full_path);
+            if checked {
+                selected_folders.insert(full_path.clone());
+            } else {
+                selected_folders.remove(&full_path);
+            }
+        }
+        ui.indent(full_path.clone(), |ui| {
+            render_export_tree(ui, child, &full_path, data, selected_sessions, selected_folders);
+        });
+    }
+
+    for &id in &node.session_ids {
+        if let Some(session) = data.servers.iter().find(|s| s.id == id) {
+            let mut checked = selected_sessions.contains(&id);
+            if ui.checkbox(&mut checked, &session.name).changed() {
+                if checked {
+                    selected_sessions.insert(id);
+                } else {
+                    selected_sessions.remove(&id);
+                }
+            }
+        }
+    }
+}
+
+/// Zaskrtne/odskrtne vsechny servery a podslozky pod danou slozkou
+/// najednou - pouziva se, kdyz uzivatel v exportnim dialogu (od)zaskrtne
+/// primo celou slozku.
+fn set_subtree_selected(
+    node: &FolderNode,
+    selected: bool,
+    selected_sessions: &mut std::collections::HashSet<Uuid>,
+    selected_folders: &mut std::collections::HashSet<String>,
+    path_prefix: &str,
+) {
+    for &id in &node.session_ids {
+        if selected {
+            selected_sessions.insert(id);
+        } else {
+            selected_sessions.remove(&id);
+        }
+    }
+    for (name, child) in &node.children {
+        let full_path = format!("{path_prefix}/{name}");
+        if selected {
+            selected_folders.insert(full_path.clone());
+        } else {
+            selected_folders.remove(&full_path);
+        }
+        set_subtree_selected(child, selected, selected_sessions, selected_folders, &full_path);
+    }
+}
+
+/// Vsechna id serveru/cesty slozek v celem stromu - pro tlacitka
+/// "Vybrat vše" / "Nic nevybírat" v exportnim dialogu.
+fn all_selection(data: &VaultData) -> (std::collections::HashSet<Uuid>, std::collections::HashSet<String>) {
+    (data.servers.iter().map(|s| s.id).collect(), data.folders.iter().cloned().collect())
 }
 
 /// Cela aplikace PO uspesnem odemceni/vytvoreni trezoru (nebo po
@@ -412,8 +509,9 @@ impl MainApp {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 if ui.button("Exportovat trezor...").clicked() {
+                    let dialog = ExportDialog::new(&self.vault.data);
                     self.close_all_dialogs();
-                    self.export_dialog = Some(ExportDialog::default());
+                    self.export_dialog = Some(dialog);
                 }
                 if ui.button("Importovat trezor...").clicked() {
                     self.close_all_dialogs();
@@ -905,21 +1003,57 @@ impl MainApp {
         }
     }
 
-    /// Vyexportuje aktualni obsah trezoru do samostatneho sifrovaneho
-    /// souboru (`Vault::export`) - klidne i s jinym heslem, nez ma
-    /// hlavni trezor (napr. pro predani serveru kolegovi).
+    /// Vyexportuje vybranou cast trezoru (jednotlive servery a/nebo cele
+    /// slozky, viz strom se zaskrtavatky v `ExportDialog`) do
+    /// samostatneho sifrovaneho souboru (`Vault::export_data`) - klidne
+    /// i s jinym heslem, nez ma hlavni trezor (napr. pro predani jen
+    /// nekolika serveru kolegovi).
     fn show_export_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut dialog) = self.export_dialog.take() else { return };
         let mut open = true;
         let mut confirmed = false;
         let mut cancel = false;
         let mut browse = false;
+        let mut select_all = false;
+        let mut select_none = false;
+
+        // Snapshot stromu/dat pro vykresleni vyberu - stejny vzor jako
+        // `show_tree` (`build_tree` je levne zavolat kazdy snimek), jen
+        // se zde navic k otevirani slozek pridavaji zaskrtavatka.
+        let tree = build_tree(&self.vault.data);
 
         egui::Window::new("Exportovat trezor")
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
             .open(&mut open)
             .show(ctx, |ui| {
+                ui.label("Co exportovat:");
+                ui.horizontal(|ui| {
+                    if ui.button("Vybrat vše").clicked() {
+                        select_all = true;
+                    }
+                    if ui.button("Nic nevybírat").clicked() {
+                        select_none = true;
+                    }
+                });
+                ui.group(|ui| {
+                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                        if tree.children.is_empty() && tree.session_ids.is_empty() {
+                            ui.label(egui::RichText::new("Trezor je prázdný - není co exportovat.").small());
+                        } else {
+                            render_export_tree(
+                                ui,
+                                &tree,
+                                "",
+                                &self.vault.data,
+                                &mut dialog.selected_sessions,
+                                &mut dialog.selected_folders,
+                            );
+                        }
+                    });
+                });
+                ui.add_space(10.0);
+
                 ui.label("Cílový soubor:");
                 ui.horizontal(|ui| {
                     ui.text_edit_singleline(&mut dialog.path);
@@ -976,6 +1110,16 @@ impl MainApp {
             }
         }
 
+        if select_all {
+            let (sessions, folders) = all_selection(&self.vault.data);
+            dialog.selected_sessions = sessions;
+            dialog.selected_folders = folders;
+        }
+        if select_none {
+            dialog.selected_sessions.clear();
+            dialog.selected_folders.clear();
+        }
+
         if cancel {
             open = false;
         }
@@ -984,6 +1128,11 @@ impl MainApp {
             let path = dialog.path.trim().to_string();
             if path.is_empty() {
                 dialog.error = Some("Zadejte cílový soubor.".to_string());
+                self.export_dialog = Some(dialog);
+                return;
+            }
+            if dialog.selected_sessions.is_empty() && dialog.selected_folders.is_empty() {
+                dialog.error = Some("Vyberte alespoň jeden server nebo složku k exportu.".to_string());
                 self.export_dialog = Some(dialog);
                 return;
             }
@@ -997,9 +1146,36 @@ impl MainApp {
                 self.export_dialog = Some(dialog);
                 return;
             }
-            match self.vault.export(&path, &dialog.password) {
+            // Vyexportuje se jen vybrana podmnozina - vybrane servery a
+            // vybrane (explicitne existujici) prazdne slozky. Slozky,
+            // ktere obsahuji jen vybrane servery, se do exportu dostanou
+            // uz automaticky pres `Session::group` techto serveru, i
+            // kdyby samotna cesta slozky nebyla v `selected_folders`.
+            let filtered = VaultData {
+                servers: self
+                    .vault
+                    .data
+                    .servers
+                    .iter()
+                    .filter(|s| dialog.selected_sessions.contains(&s.id))
+                    .cloned()
+                    .collect(),
+                folders: self
+                    .vault
+                    .data
+                    .folders
+                    .iter()
+                    .filter(|f| dialog.selected_folders.contains(*f))
+                    .cloned()
+                    .collect(),
+            };
+            match Vault::export_data(&filtered, &path, &dialog.password) {
                 Ok(()) => {
-                    self.status_message = Some(format!("Trezor exportován do {path}"));
+                    self.status_message = Some(format!(
+                        "Trezor exportován do {path} ({} serverů, {} složek)",
+                        filtered.servers.len(),
+                        filtered.folders.len()
+                    ));
                 }
                 Err(e) => {
                     dialog.error = Some(format!("Export selhal: {e}"));
