@@ -28,6 +28,7 @@
 //! klicem (viz `app::SETTINGS_STORAGE_KEY`).
 
 mod app;
+mod i18n;
 mod terminal;
 mod theme;
 

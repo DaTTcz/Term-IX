@@ -42,6 +42,7 @@ use termx_update::LatestRelease;
 use termx_vault::{Vault, VaultData};
 use uuid::Uuid;
 
+use crate::i18n::{self, Lang};
 use crate::terminal;
 use crate::theme;
 
@@ -69,11 +70,18 @@ pub struct AppSettings {
     /// uz drive sam obnovuje `persist_window` (eframe).
     #[serde(default)]
     pub window_maximized: bool,
+    /// Jazyk UI aplikace - viz [`crate::i18n::Lang`] a pozadavek "do
+    /// nastavení bych dal možnost dropdown vybrat si jazyk". `#[serde(default)]`
+    /// kvuli zpetne kompatibilite s nastavenimi ulozenymi pred zavedenim
+    /// teto volby (chybejici pole ve starem souboru = `Lang::default()`,
+    /// ne chyba pri nacitani).
+    #[serde(default)]
+    pub lang: Lang,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { auto_reconnect: false, window_maximized: false }
+        Self { auto_reconnect: false, window_maximized: false, lang: Lang::default() }
     }
 }
 
@@ -717,7 +725,7 @@ impl MainApp {
 
     fn save_vault(&mut self) {
         if let Err(e) = self.vault.save(&self.master_password) {
-            self.status_message = Some(format!("Ulozeni trezoru selhalo: {e}"));
+            self.status_message = Some(format!("{}: {e}", i18n::t(self.settings.lang).vault_save_failed));
         }
     }
 
@@ -751,10 +759,11 @@ impl MainApp {
     // -- taby ---------------------------------------------------------
 
     fn tab_title(&self, kind: TabKind) -> String {
+        let tr = i18n::t(self.settings.lang);
         match kind {
-            TabKind::Home => "Domů".to_string(),
-            TabKind::Settings => "Nastavení".to_string(),
-            TabKind::Connection(id) => self.find_session(id).map(|s| s.name.clone()).unwrap_or_else(|| "Spojení".to_string()),
+            TabKind::Home => tr.tab_home.to_string(),
+            TabKind::Settings => tr.tab_settings.to_string(),
+            TabKind::Connection(id) => self.find_session(id).map(|s| s.name.clone()).unwrap_or_else(|| tr.tab_connection_fallback.to_string()),
         }
     }
 
@@ -1012,10 +1021,11 @@ impl MainApp {
     fn render_home(&mut self, ui: &mut egui::Ui) {
         let logo = self.logo_texture(ui.ctx());
         let mut submit = false;
+        let tr = i18n::t(self.settings.lang);
 
         ui.vertical_centered(|ui| {
             ui.add_space(24.0);
-            ui.heading("Připojit k novému serveru");
+            ui.heading(tr.home_heading);
             ui.add_space(10.0);
 
             // `egui::Grid` bohuzel neni "center-aware" - i uvnitr
@@ -1036,7 +1046,7 @@ impl MainApp {
                 }
                 ui.allocate_ui(egui::vec2(HOME_FORM_WIDTH, 0.0), |ui| {
                     egui::Grid::new("home_connect_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                        ui.label("Název:");
+                        ui.label(tr.field_name);
                         ui.text_edit_singleline(&mut self.home_connect_form.name);
                         ui.end_row();
 
@@ -1045,24 +1055,24 @@ impl MainApp {
                         // docasneho rychleho spojeni (`save == false`)
                         // se radek vubec nezobrazi.
                         if !self.is_guest && self.home_connect_form.save {
-                            ui.label("Složka:");
+                            ui.label(tr.field_folder);
                             ui.text_edit_singleline(&mut self.home_connect_form.folder);
                             ui.end_row();
                         }
 
-                        ui.label("Host:");
+                        ui.label(tr.field_host);
                         ui.text_edit_singleline(&mut self.home_connect_form.host);
                         ui.end_row();
 
-                        ui.label("Port:");
+                        ui.label(tr.field_port);
                         ui.text_edit_singleline(&mut self.home_connect_form.port);
                         ui.end_row();
 
-                        ui.label("Uživatel:");
+                        ui.label(tr.field_username);
                         ui.text_edit_singleline(&mut self.home_connect_form.username);
                         ui.end_row();
 
-                        ui.label("Heslo:");
+                        ui.label(tr.field_password);
                         ui.add(egui::TextEdit::singleline(&mut self.home_connect_form.password).password(true));
                         ui.end_row();
                     });
@@ -1074,20 +1084,14 @@ impl MainApp {
                 // V hostovskem rezimu neni kam ukladat - zadny checkbox,
                 // rovnou jen vysvetlujici poznamka (`save` uz je natvrdo
                 // `false` z `MainApp::new_guest`).
-                ui.label(egui::RichText::new("Hostovský režim: spojení se neukládá, jde vždy jen o dočasné rychlé spojení.").small());
+                ui.label(egui::RichText::new(tr.home_guest_note).small());
             } else {
-                ui.checkbox(&mut self.home_connect_form.save, "Uložit server do trezoru");
-                ui.label(
-                    egui::RichText::new(
-                        "Když je zaškrtnuto, server se uloží do trezoru a objeví se ve stromu vlevo. \
-                         Když ne, jde jen o dočasné rychlé spojení (zmizí se zavřením tabu/aplikace).",
-                    )
-                    .small(),
-                );
+                ui.checkbox(&mut self.home_connect_form.save, tr.home_save_checkbox);
+                ui.label(egui::RichText::new(tr.home_save_hint).small());
             }
 
             ui.add_space(10.0);
-            if ui.add_enabled(!self.home_connect_form.host.trim().is_empty(), egui::Button::new("Připojit")).clicked() {
+            if ui.add_enabled(!self.home_connect_form.host.trim().is_empty(), egui::Button::new(tr.btn_connect)).clicked() {
                 submit = true;
             }
 
@@ -1096,24 +1100,29 @@ impl MainApp {
             ui.add_space(16.0);
 
             if let Some(logo) = logo {
-                ui.add(egui::Image::new(&logo).max_size(egui::vec2(72.0, 72.0)));
+                // Zpetna vazba "logo můžeme ukázat větší na Domácím TABu" -
+                // puvodne 72x72 (kdyz logo/verze byly jen malym doplnkem
+                // pod formularem pripojeni, viz komentar u teto metody
+                // vyse), ted uz vetsi, protoze je to jediny obrazek na
+                // cele obrazovce a ma prostor.
+                ui.add(egui::Image::new(&logo).max_size(egui::vec2(160.0, 160.0)));
                 ui.add_space(8.0);
             }
             ui.heading("Term-IX");
-            ui.label(format!("verze {}", env!("CARGO_PKG_VERSION")));
+            ui.label(format!("{} {}", tr.version_label, env!("CARGO_PKG_VERSION")));
             ui.label(egui::RichText::new("DaTTcz").small());
             ui.add_space(10.0);
 
             match &self.update_check {
                 UpdateCheck::NotStarted | UpdateCheck::Checking => {
-                    ui.label(egui::RichText::new("Kontroluji dostupnost aktualizace…").small());
+                    ui.label(egui::RichText::new(tr.checking_update).small());
                 }
                 UpdateCheck::UpToDate => {
-                    ui.colored_label(theme::ACCENT, "Máte nejnovější verzi.");
+                    ui.colored_label(theme::ACCENT, tr.up_to_date);
                 }
                 UpdateCheck::Available(latest) => {
-                    ui.colored_label(egui::Color32::from_rgb(0xe6, 0xc2, 0x5a), format!("Dostupná je nová verze {}.", latest.version));
-                    if ui.button("Otevřít stránku s vydáním").clicked() {
+                    ui.colored_label(egui::Color32::from_rgb(0xe6, 0xc2, 0x5a), i18n::update_available(self.settings.lang, &latest.version));
+                    if ui.button(tr.btn_open_release_page).clicked() {
                         ui.ctx().open_url(egui::OpenUrl {
                             url: latest.url.clone(),
                             new_tab: true,
@@ -1121,7 +1130,7 @@ impl MainApp {
                     }
                 }
                 UpdateCheck::Failed(e) => {
-                    ui.label(egui::RichText::new(format!("Kontrolu aktualizace se nepodařilo provést ({e}).")).small());
+                    ui.label(egui::RichText::new(i18n::update_check_failed(self.settings.lang, e)).small());
                 }
             }
         });
@@ -1176,52 +1185,59 @@ impl MainApp {
     }
 
     fn render_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Nastavení");
+        let tr = i18n::t(self.settings.lang);
+        ui.heading(tr.settings_heading);
         ui.separator();
         if self.is_guest {
-            ui.label(
-                "Jste přihlášeni v hostovském režimu (bez hlavního hesla) - žádný trezor \
-                 se nečte ani nezapisuje. Pro přístup k uloženým serverům aplikaci restartujte \
-                 a zadejte hlavní heslo.",
-            );
+            ui.label(tr.settings_guest_note);
         } else {
-            ui.label("Umístění trezoru:");
+            ui.label(tr.settings_vault_location);
             ui.code(self.vault.path().display().to_string());
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if ui.button("Exportovat trezor...").clicked() {
+                if ui.button(tr.btn_export_vault).clicked() {
                     let dialog = ExportDialog::new(&self.vault.data);
                     self.close_all_dialogs();
                     self.export_dialog = Some(dialog);
                 }
-                if ui.button("Importovat trezor...").clicked() {
+                if ui.button(tr.btn_import_vault).clicked() {
                     self.close_all_dialogs();
                     self.import_dialog = Some(ImportDialog::default());
                 }
             });
         }
         ui.add_space(12.0);
-        ui.label(
-            "Vzhled: v této verzi je k dispozici jen 'terminálové' tmavé téma. \
-             Modernější téma přibude jako další volba zde.",
-        );
+        ui.label(tr.settings_theme_note);
 
         ui.add_space(18.0);
         ui.separator();
         ui.add_space(12.0);
-        ui.heading("Ztráta SSH spojení");
+        ui.heading(tr.settings_language_heading);
         ui.add_space(4.0);
-        ui.checkbox(&mut self.settings.auto_reconnect, "Automaticky se pokoušet obnovit ztracené spojení");
+        ui.horizontal(|ui| {
+            ui.label(tr.settings_language_label);
+            // Jazyk se cte/uklada primo v `self.settings.lang` -
+            // zmenene UI se hned od pristiho snimku vykresli v novem
+            // jazyce (`tr` vyse se pocita znovu kazdy snimek), zadny
+            // restart aplikace neni potreba. Zaroven je to bezna
+            // `AppSettings`, takze volba preziva restart (`TermxApp::save`).
+            egui::ComboBox::from_id_salt("settings_lang_combo")
+                .selected_text(self.settings.lang.native_name())
+                .show_ui(ui, |ui| {
+                    for lang in Lang::ALL {
+                        ui.selectable_value(&mut self.settings.lang, lang, lang.native_name());
+                    }
+                });
+        });
+
+        ui.add_space(18.0);
+        ui.separator();
+        ui.add_space(12.0);
+        ui.heading(tr.settings_ssh_loss_heading);
         ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(
-                "Když je vypnuto (výchozí), spojení po odpojení zůstane přerušené a příslušný \
-                 tab se jen zbarví, aby bylo na první pohled vidět, že je mrtvé - obnovit ho pak \
-                 jde ručně tlačítkem přímo v tabu terminálu. Když je zapnuto, aplikace se navíc \
-                 sama periodicky pokouší spojení obnovit.",
-            )
-            .small(),
-        );
+        ui.checkbox(&mut self.settings.auto_reconnect, tr.settings_auto_reconnect_checkbox);
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(tr.settings_auto_reconnect_note).small());
     }
 
     fn render_connection(&mut self, ui: &mut egui::Ui, id: Uuid) {
@@ -1235,7 +1251,7 @@ impl MainApp {
             // Tento tab nema (na rozdil od SSH terminalu) duvod jit az
             // ke kraji - drobne odsazeni jen pro tuto textovou hlasku.
             egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
-                ui.label("Tento server už neexistuje (byl smazán nebo šlo o dočasné rychlé spojení, které skončilo se zavřením tabu).");
+                ui.label(i18n::t(self.settings.lang).connection_gone);
             });
             return;
         };
@@ -1244,10 +1260,7 @@ impl MainApp {
             egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
                 ui.heading(&session.name);
                 ui.add_space(8.0);
-                ui.label(format!(
-                    "Protokol {} zatím nemá vestavěný terminál - podporováno je prozatím jen SSH.",
-                    session.protocol
-                ));
+                ui.label(i18n::protocol_not_supported(self.settings.lang, session.protocol));
             });
             return;
         }
@@ -1255,55 +1268,56 @@ impl MainApp {
         self.terminal_sessions.entry(id).or_insert_with(|| terminal::TerminalSession::new(&session));
 
         if let Some(term_session) = self.terminal_sessions.get_mut(&id) {
-            term_session.render(ui, self.settings.auto_reconnect);
+            term_session.render(ui, self.settings.auto_reconnect, self.settings.lang);
         }
     }
 
     // -- horni menu -----------------------------------------------------
 
     fn top_menu(&mut self, ctx: &egui::Context) {
+        let tr = i18n::t(self.settings.lang);
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
-                ui.menu_button("Terminal", |ui| {
-                    if ui.button("Ukončit").clicked() {
+                ui.menu_button(tr.menu_terminal, |ui| {
+                    if ui.button(tr.menu_terminal_exit).clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Sessions", |ui| {
+                ui.menu_button(tr.menu_sessions, |ui| {
                     if !self.is_guest {
-                        if ui.button("Nový server...").clicked() {
+                        if ui.button(tr.menu_sessions_new_server).clicked() {
                             self.close_all_dialogs();
                             self.new_session_form = Some(NewSessionForm::default());
                             ui.close_menu();
                         }
-                        if ui.button("Nová složka...").clicked() {
+                        if ui.button(tr.menu_sessions_new_folder).clicked() {
                             self.close_all_dialogs();
                             self.new_folder_dialog = Some(String::new());
                             ui.close_menu();
                         }
                         ui.separator();
                     }
-                    if ui.button("Nové rychlé spojení...").clicked() {
+                    if ui.button(tr.menu_sessions_new_quick_connect).clicked() {
                         self.close_all_dialogs();
                         self.quick_connect_form = Some(QuickConnectForm::default());
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("View", |_ui| {});
-                ui.menu_button("Tools", |_ui| {});
-                ui.menu_button("Settings", |ui| {
-                    if ui.button("Předvolby...").clicked() {
+                ui.menu_button(tr.menu_view, |_ui| {});
+                ui.menu_button(tr.menu_tools, |_ui| {});
+                ui.menu_button(tr.menu_settings, |ui| {
+                    if ui.button(tr.menu_settings_preferences).clicked() {
                         self.open_settings_tab();
                         ui.close_menu();
                     }
-                    if !self.is_guest && ui.button("Změnit heslo trezoru...").clicked() {
+                    if !self.is_guest && ui.button(tr.menu_settings_change_password).clicked() {
                         self.close_all_dialogs();
                         self.change_password_dialog = Some(ChangePasswordDialog::default());
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Help", |ui| {
+                ui.menu_button(tr.menu_help, |ui| {
                     ui.label(format!("Term-IX v{}", env!("CARGO_PKG_VERSION")));
                 });
             });
@@ -1317,44 +1331,45 @@ impl MainApp {
         let mut open = true;
         let mut submit = false;
         let mut cancel = false;
+        let tr = i18n::t(self.settings.lang);
 
-        centered_dialog(egui::Window::new("Nový server"), ctx)
+        centered_dialog(egui::Window::new(tr.dialog_new_server_title), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
                 egui::Grid::new("new_session_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                    ui.label("Název:");
+                    ui.label(tr.field_name);
                     ui.text_edit_singleline(&mut form.name);
                     ui.end_row();
 
-                    ui.label("Složka:");
+                    ui.label(tr.field_folder);
                     ui.text_edit_singleline(&mut form.folder);
                     ui.end_row();
 
-                    ui.label("Host:");
+                    ui.label(tr.field_host);
                     ui.text_edit_singleline(&mut form.host);
                     ui.end_row();
 
-                    ui.label("Port:");
+                    ui.label(tr.field_port);
                     ui.text_edit_singleline(&mut form.port);
                     ui.end_row();
 
-                    ui.label("Uživatel:");
+                    ui.label(tr.field_username);
                     ui.text_edit_singleline(&mut form.username);
                     ui.end_row();
 
-                    ui.label("Heslo:");
+                    ui.label(tr.field_password);
                     ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
                     ui.end_row();
                 });
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Přidat").clicked() {
+                    if ui.button(tr.btn_add).clicked() {
                         submit = true;
                     }
-                    if ui.button("Zrušit").clicked() {
+                    if ui.button(tr.btn_cancel).clicked() {
                         cancel = true;
                     }
                 });
@@ -1399,44 +1414,45 @@ impl MainApp {
         let mut open = true;
         let mut submit = false;
         let mut cancel = false;
+        let tr = i18n::t(self.settings.lang);
 
-        centered_dialog(egui::Window::new("Upravit server"), ctx)
+        centered_dialog(egui::Window::new(tr.dialog_edit_server_title), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
                 egui::Grid::new("edit_session_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                    ui.label("Název:");
+                    ui.label(tr.field_name);
                     ui.text_edit_singleline(&mut form.name);
                     ui.end_row();
 
-                    ui.label("Složka:");
+                    ui.label(tr.field_folder);
                     ui.text_edit_singleline(&mut form.folder);
                     ui.end_row();
 
-                    ui.label("Host:");
+                    ui.label(tr.field_host);
                     ui.text_edit_singleline(&mut form.host);
                     ui.end_row();
 
-                    ui.label("Port:");
+                    ui.label(tr.field_port);
                     ui.text_edit_singleline(&mut form.port);
                     ui.end_row();
 
-                    ui.label("Uživatel:");
+                    ui.label(tr.field_username);
                     ui.text_edit_singleline(&mut form.username);
                     ui.end_row();
 
-                    ui.label("Heslo:");
+                    ui.label(tr.field_password);
                     ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
                     ui.end_row();
                 });
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Uložit").clicked() {
+                    if ui.button(tr.btn_save).clicked() {
                         submit = true;
                     }
-                    if ui.button("Zrušit").clicked() {
+                    if ui.button(tr.btn_cancel).clicked() {
                         cancel = true;
                     }
                 });
@@ -1478,19 +1494,20 @@ impl MainApp {
         let mut open = true;
         let mut confirmed = false;
         let mut cancel = false;
+        let tr = i18n::t(self.settings.lang);
 
-        centered_dialog(egui::Window::new("Nová složka"), ctx)
+        centered_dialog(egui::Window::new(tr.dialog_new_folder_title), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label("Cesta nové složky (např. Práce/Nová):");
+                ui.label(tr.new_folder_path_hint);
                 ui.text_edit_singleline(&mut value);
                 ui.horizontal(|ui| {
-                    if ui.button("Vytvořit").clicked() {
+                    if ui.button(tr.btn_create).clicked() {
                         confirmed = true;
                     }
-                    if ui.button("Zrušit").clicked() {
+                    if ui.button(tr.btn_cancel).clicked() {
                         cancel = true;
                     }
                 });
@@ -1516,18 +1533,19 @@ impl MainApp {
         let mut open = true;
         let mut confirmed = false;
         let mut cancel = false;
+        let tr = i18n::t(self.settings.lang);
 
-        centered_dialog(egui::Window::new("Přejmenovat"), ctx)
+        centered_dialog(egui::Window::new(tr.dialog_rename_title), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.text_edit_singleline(&mut dialog.value);
                 ui.horizontal(|ui| {
-                    if ui.button("Uložit").clicked() {
+                    if ui.button(tr.btn_save).clicked() {
                         confirmed = true;
                     }
-                    if ui.button("Zrušit").clicked() {
+                    if ui.button(tr.btn_cancel).clicked() {
                         cancel = true;
                     }
                 });
@@ -1562,19 +1580,20 @@ impl MainApp {
         let mut open = true;
         let mut confirmed = false;
         let mut cancel = false;
+        let tr = i18n::t(self.settings.lang);
 
-        centered_dialog(egui::Window::new("Přesunout do složky"), ctx)
+        centered_dialog(egui::Window::new(tr.dialog_move_title), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label("Cesta složky (např. Práce/PBX), prázdné = kořenová úroveň:");
+                ui.label(tr.move_folder_path_hint);
                 ui.text_edit_singleline(&mut dialog.value);
                 ui.horizontal(|ui| {
-                    if ui.button("Přesunout").clicked() {
+                    if ui.button(tr.btn_move).clicked() {
                         confirmed = true;
                     }
-                    if ui.button("Zrušit").clicked() {
+                    if ui.button(tr.btn_cancel).clicked() {
                         cancel = true;
                     }
                 });
@@ -1600,6 +1619,7 @@ impl MainApp {
         let mut open = true;
         let mut confirmed = false;
         let mut cancel = false;
+        let tr = i18n::t(self.settings.lang);
 
         let message = match &target {
             DeleteTarget::Session(id) => {
@@ -1611,18 +1631,18 @@ impl MainApp {
                     .find(|s| s.id == *id)
                     .map(|s| s.name.clone())
                     .unwrap_or_default();
-                format!("Opravdu smazat server „{name}“?")
+                i18n::confirm_delete_server(self.settings.lang, &name)
             }
-            DeleteTarget::Folder(path) => format!("Opravdu smazat prázdnou složku „{path}“?"),
+            DeleteTarget::Folder(path) => i18n::confirm_delete_folder(self.settings.lang, path),
         };
 
-        centered_dialog(egui::Window::new("Smazat"), ctx).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+        centered_dialog(egui::Window::new(tr.dialog_delete_title), ctx).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
             ui.label(&message);
             ui.horizontal(|ui| {
-                if ui.button("Smazat").clicked() {
+                if ui.button(tr.btn_delete).clicked() {
                     confirmed = true;
                 }
-                if ui.button("Zrušit").clicked() {
+                if ui.button(tr.btn_cancel).clicked() {
                     cancel = true;
                 }
             });
@@ -1667,14 +1687,15 @@ impl MainApp {
         // patri jemu.
         let mut confirmed = ctx.input(|i| i.key_pressed(egui::Key::Enter));
         let mut cancel = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let tr = i18n::t(self.settings.lang);
 
-        centered_dialog(egui::Window::new("Zavřít spojení"), ctx).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
-            ui.label(format!("Spojení „{}“ je právě aktivní. Opravdu chcete tab zavřít a spojení ukončit?", confirm.title));
+        centered_dialog(egui::Window::new(tr.dialog_close_connection_title), ctx).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+            ui.label(i18n::confirm_close_connection(self.settings.lang, &confirm.title));
             ui.horizontal(|ui| {
-                if ui.button("Zavřít").clicked() {
+                if ui.button(tr.btn_close).clicked() {
                     confirmed = true;
                 }
-                if ui.button("Zrušit").clicked() {
+                if ui.button(tr.btn_cancel).clicked() {
                     cancel = true;
                 }
             });
@@ -1702,22 +1723,23 @@ impl MainApp {
         let mut open = true;
         let mut confirmed = false;
         let mut cancel = false;
+        let tr = i18n::t(self.settings.lang);
 
-        centered_dialog(egui::Window::new("Změnit heslo trezoru"), ctx)
+        centered_dialog(egui::Window::new(tr.dialog_change_password_title), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
                 egui::Grid::new("change_password_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                    ui.label("Současné heslo:");
+                    ui.label(tr.current_password_label);
                     ui.add(egui::TextEdit::singleline(&mut dialog.old).password(true));
                     ui.end_row();
 
-                    ui.label("Nové heslo:");
+                    ui.label(tr.new_password_label);
                     ui.add(egui::TextEdit::singleline(&mut dialog.new1).password(true));
                     ui.end_row();
 
-                    ui.label("Zopakujte nové heslo:");
+                    ui.label(tr.repeat_new_password_label);
                     ui.add(egui::TextEdit::singleline(&mut dialog.new2).password(true));
                     ui.end_row();
                 });
@@ -1729,10 +1751,10 @@ impl MainApp {
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Změnit").clicked() {
+                    if ui.button(tr.btn_change).clicked() {
                         confirmed = true;
                     }
-                    if ui.button("Zrušit").clicked() {
+                    if ui.button(tr.btn_cancel).clicked() {
                         cancel = true;
                     }
                 });
@@ -1744,27 +1766,27 @@ impl MainApp {
 
         if confirmed {
             if dialog.old != self.master_password {
-                dialog.error = Some("Současné heslo je nesprávné.".to_string());
+                dialog.error = Some(tr.current_password_wrong.to_string());
                 self.change_password_dialog = Some(dialog);
                 return;
             }
             if dialog.new1.is_empty() {
-                dialog.error = Some("Nové heslo nesmí být prázdné.".to_string());
+                dialog.error = Some(tr.new_password_empty.to_string());
                 self.change_password_dialog = Some(dialog);
                 return;
             }
             if dialog.new1 != dialog.new2 {
-                dialog.error = Some("Zadaná nová hesla se neshodují.".to_string());
+                dialog.error = Some(tr.new_passwords_mismatch.to_string());
                 self.change_password_dialog = Some(dialog);
                 return;
             }
             match self.vault.save(&dialog.new1) {
                 Ok(()) => {
                     self.master_password = dialog.new1.clone();
-                    self.status_message = Some("Heslo trezoru bylo změněno.".to_string());
+                    self.status_message = Some(tr.vault_password_changed.to_string());
                 }
                 Err(e) => {
-                    dialog.error = Some(format!("Uložení trezoru s novým heslem selhalo: {e}"));
+                    dialog.error = Some(format!("{}: {e}", tr.vault_save_failed));
                     self.change_password_dialog = Some(dialog);
                 }
             }
@@ -1783,43 +1805,44 @@ impl MainApp {
         let mut open = true;
         let mut submit = false;
         let mut cancel = false;
+        let tr = i18n::t(self.settings.lang);
 
-        centered_dialog(egui::Window::new("Nové rychlé spojení"), ctx)
+        centered_dialog(egui::Window::new(tr.dialog_quick_connect_title), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
                 egui::Grid::new("quick_connect_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                    ui.label("Název:");
+                    ui.label(tr.field_name);
                     ui.text_edit_singleline(&mut form.name);
                     ui.end_row();
 
-                    ui.label("Host:");
+                    ui.label(tr.field_host);
                     ui.text_edit_singleline(&mut form.host);
                     ui.end_row();
 
-                    ui.label("Port:");
+                    ui.label(tr.field_port);
                     ui.text_edit_singleline(&mut form.port);
                     ui.end_row();
 
-                    ui.label("Uživatel:");
+                    ui.label(tr.field_username);
                     ui.text_edit_singleline(&mut form.username);
                     ui.end_row();
 
-                    ui.label("Heslo:");
+                    ui.label(tr.field_password);
                     ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
                     ui.end_row();
                 });
 
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("Toto spojení se nikam neukládá - platí jen do zavření tabu/aplikace.").small());
+                ui.label(egui::RichText::new(tr.quick_connect_note).small());
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Připojit").clicked() {
+                    if ui.button(tr.btn_connect).clicked() {
                         submit = true;
                     }
-                    if ui.button("Zrušit").clicked() {
+                    if ui.button(tr.btn_cancel).clicked() {
                         cancel = true;
                     }
                 });
@@ -1863,27 +1886,28 @@ impl MainApp {
         let mut browse = false;
         let mut select_all = false;
         let mut select_none = false;
+        let tr = i18n::t(self.settings.lang);
 
         // Snapshot stromu/dat pro vykresleni vyberu - stejny vzor jako
         // `show_tree` (`build_tree` je levne zavolat kazdy snimek), jen
         // se zde navic k otevirani slozek pridavaji zaskrtavatka.
         let tree = build_tree(&self.vault.data);
 
-        centered_dialog(egui::Window::new("Exportovat trezor"), ctx)
+        centered_dialog(egui::Window::new(tr.dialog_export_title), ctx)
             .collapsible(false)
             .resizable(true)
             .default_width(440.0)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label("Co exportovat:");
+                ui.label(tr.export_what_label);
                 ui.horizontal_wrapped(|ui| {
                     ui.label("🔍");
                     ui.add(egui::TextEdit::singleline(&mut dialog.filter).desired_width(160.0))
-                        .on_hover_text("Hledat podle názvu serveru, hostu nebo složky");
-                    if ui.button("Vybrat vše").clicked() {
+                        .on_hover_text(tr.export_search_hover);
+                    if ui.button(tr.btn_select_all).clicked() {
                         select_all = true;
                     }
-                    if ui.button("Nic nevybírat").clicked() {
+                    if ui.button(tr.btn_select_none).clicked() {
                         select_none = true;
                     }
                 });
@@ -1891,7 +1915,7 @@ impl MainApp {
                 ui.group(|ui| {
                     egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
                         if tree.children.is_empty() && tree.session_ids.is_empty() {
-                            ui.label(egui::RichText::new("Trezor je prázdný - není co exportovat.").small());
+                            ui.label(egui::RichText::new(tr.export_empty_vault).small());
                         } else {
                             let filter_lower = dialog.filter.trim().to_lowercase();
                             render_export_tree(
@@ -1908,31 +1932,25 @@ impl MainApp {
                 });
                 ui.add_space(10.0);
 
-                ui.label("Cílový soubor:");
+                ui.label(tr.export_target_file_label);
                 ui.horizontal(|ui| {
                     ui.text_edit_singleline(&mut dialog.path);
-                    if ui.button("Procházet...").clicked() {
+                    if ui.button(tr.btn_browse).clicked() {
                         browse = true;
                     }
                 });
                 ui.add_space(6.0);
                 egui::Grid::new("export_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                    ui.label("Heslo exportu:");
+                    ui.label(tr.export_password_label);
                     ui.add(egui::TextEdit::singleline(&mut dialog.password).password(true));
                     ui.end_row();
 
-                    ui.label("Zopakujte heslo:");
+                    ui.label(tr.repeat_password_label);
                     ui.add(egui::TextEdit::singleline(&mut dialog.confirm).password(true));
                     ui.end_row();
                 });
                 ui.add_space(6.0);
-                ui.label(
-                    egui::RichText::new(
-                        "Heslo exportu může být jiné než hlavní heslo trezoru - hodí se \
-                         např. při předání serverů kolegovi.",
-                    )
-                    .small(),
-                );
+                ui.label(egui::RichText::new(tr.export_password_note).small());
 
                 if let Some(err) = &dialog.error {
                     ui.add_space(6.0);
@@ -1941,10 +1959,10 @@ impl MainApp {
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Exportovat").clicked() {
+                    if ui.button(tr.btn_export).clicked() {
                         confirmed = true;
                     }
-                    if ui.button("Zrušit").clicked() {
+                    if ui.button(tr.btn_cancel).clicked() {
                         cancel = true;
                     }
                 });
@@ -1955,9 +1973,9 @@ impl MainApp {
         // blokujici volani, takze se hodi az po vykresleni tohoto snimku.
         if browse {
             if let Some(path) = rfd::FileDialog::new()
-                .set_title("Exportovat trezor jako...")
+                .set_title(tr.export_save_dialog_title)
                 .set_file_name("term-ix-export.termx")
-                .add_filter("Term-IX trezor", &["termx"])
+                .add_filter(tr.vault_file_filter_name, &["termx"])
                 .save_file()
             {
                 dialog.path = path.display().to_string();
@@ -1981,22 +1999,22 @@ impl MainApp {
         if confirmed {
             let path = dialog.path.trim().to_string();
             if path.is_empty() {
-                dialog.error = Some("Zadejte cílový soubor.".to_string());
+                dialog.error = Some(tr.export_target_missing.to_string());
                 self.export_dialog = Some(dialog);
                 return;
             }
             if dialog.selected_sessions.is_empty() && dialog.selected_folders.is_empty() {
-                dialog.error = Some("Vyberte alespoň jeden server nebo složku k exportu.".to_string());
+                dialog.error = Some(tr.export_selection_empty.to_string());
                 self.export_dialog = Some(dialog);
                 return;
             }
             if dialog.password.is_empty() {
-                dialog.error = Some("Heslo exportu nesmí být prázdné.".to_string());
+                dialog.error = Some(tr.export_password_empty.to_string());
                 self.export_dialog = Some(dialog);
                 return;
             }
             if dialog.password != dialog.confirm {
-                dialog.error = Some("Zadaná hesla se neshodují.".to_string());
+                dialog.error = Some(tr.passwords_mismatch.to_string());
                 self.export_dialog = Some(dialog);
                 return;
             }
@@ -2025,14 +2043,11 @@ impl MainApp {
             };
             match Vault::export_data(&filtered, &path, &dialog.password) {
                 Ok(()) => {
-                    self.status_message = Some(format!(
-                        "Trezor exportován do {path} ({} serverů, {} složek)",
-                        filtered.servers.len(),
-                        filtered.folders.len()
-                    ));
+                    self.status_message =
+                        Some(i18n::export_saved(self.settings.lang, &path, filtered.servers.len(), filtered.folders.len()));
                 }
                 Err(e) => {
-                    dialog.error = Some(format!("Export selhal: {e}"));
+                    dialog.error = Some(i18n::export_failed(self.settings.lang, e));
                     self.export_dialog = Some(dialog);
                 }
             }
@@ -2050,31 +2065,26 @@ impl MainApp {
         let mut confirmed = false;
         let mut cancel = false;
         let mut browse = false;
+        let tr = i18n::t(self.settings.lang);
 
-        centered_dialog(egui::Window::new("Importovat trezor"), ctx)
+        centered_dialog(egui::Window::new(tr.dialog_import_title), ctx)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label("Zdrojový soubor:");
+                ui.label(tr.import_source_file_label);
                 ui.horizontal(|ui| {
                     ui.text_edit_singleline(&mut dialog.path);
-                    if ui.button("Procházet...").clicked() {
+                    if ui.button(tr.btn_browse).clicked() {
                         browse = true;
                     }
                 });
                 ui.add_space(6.0);
-                ui.label("Heslo souboru:");
+                ui.label(tr.import_password_label);
                 ui.add(egui::TextEdit::singleline(&mut dialog.password).password(true));
                 ui.add_space(8.0);
-                ui.checkbox(&mut dialog.replace, "Nahradit aktuální trezor (místo sloučení)");
-                ui.label(
-                    egui::RichText::new(
-                        "Sloučení přidá importované servery a složky k těm stávajícím. \
-                         Nahrazení aktuální trezor kompletně přepíše obsahem importu.",
-                    )
-                    .small(),
-                );
+                ui.checkbox(&mut dialog.replace, tr.import_replace_checkbox);
+                ui.label(egui::RichText::new(tr.import_merge_note).small());
 
                 if let Some(err) = &dialog.error {
                     ui.add_space(6.0);
@@ -2083,10 +2093,10 @@ impl MainApp {
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Importovat").clicked() {
+                    if ui.button(tr.btn_import).clicked() {
                         confirmed = true;
                     }
-                    if ui.button("Zrušit").clicked() {
+                    if ui.button(tr.btn_cancel).clicked() {
                         cancel = true;
                     }
                 });
@@ -2094,8 +2104,8 @@ impl MainApp {
 
         if browse {
             if let Some(path) = rfd::FileDialog::new()
-                .set_title("Importovat trezor...")
-                .add_filter("Term-IX trezor", &["termx"])
+                .set_title(tr.import_open_dialog_title)
+                .add_filter(tr.vault_file_filter_name, &["termx"])
                 .pick_file()
             {
                 dialog.path = path.display().to_string();
@@ -2109,7 +2119,7 @@ impl MainApp {
         if confirmed {
             let path = dialog.path.trim().to_string();
             if path.is_empty() {
-                dialog.error = Some("Zadejte zdrojový soubor.".to_string());
+                dialog.error = Some(tr.import_source_missing.to_string());
                 self.import_dialog = Some(dialog);
                 return;
             }
@@ -2126,10 +2136,10 @@ impl MainApp {
                         self.vault.data.servers.extend(imported.servers);
                     }
                     self.save_vault();
-                    self.status_message = Some("Trezor byl úspěšně importován.".to_string());
+                    self.status_message = Some(tr.import_success.to_string());
                 }
                 Err(e) => {
-                    dialog.error = Some(format!("Import selhal: {e}"));
+                    dialog.error = Some(i18n::import_failed(self.settings.lang, e));
                     self.import_dialog = Some(dialog);
                 }
             }
@@ -2146,12 +2156,13 @@ impl MainApp {
             return;
         }
 
+        let tr = i18n::t(self.settings.lang);
         ui.horizontal(|ui| {
-            if ui.button("+ Server").clicked() {
+            if ui.button(tr.btn_new_server).clicked() {
                 self.close_all_dialogs();
                 self.new_session_form = Some(NewSessionForm::default());
             }
-            if ui.button("+ Složka").clicked() {
+            if ui.button(tr.btn_new_folder).clicked() {
                 self.close_all_dialogs();
                 self.new_folder_dialog = Some(String::new());
             }
@@ -2170,20 +2181,21 @@ impl MainApp {
     /// aplikaci restartovat, viz `submit_guest_login`.
     fn render_guest_login(&mut self, ui: &mut egui::Ui) {
         let vault_exists = self.vault_path.exists();
+        let tr = i18n::t(self.settings.lang);
 
-        ui.label(egui::RichText::new("Hostovský režim").strong());
-        ui.label(egui::RichText::new("Uložené servery nejsou vidět.").small());
+        ui.label(egui::RichText::new(tr.guest_mode_heading).strong());
+        ui.label(egui::RichText::new(tr.guest_mode_hint).small());
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(10.0);
 
-        ui.label(if vault_exists { "Přihlásit se k trezoru:" } else { "Trezor ještě neexistuje - nastavte heslo:" });
+        ui.label(if vault_exists { tr.guest_login_prompt } else { tr.guest_create_prompt });
         ui.add_space(4.0);
 
         let pw_resp = ui.add(
             egui::TextEdit::singleline(&mut self.guest_login.password)
                 .password(true)
-                .hint_text("Hlavní heslo")
+                .hint_text(tr.main_password_hint)
                 .desired_width(f32::INFINITY),
         );
         // Stejny vzor jako `LockScreen::focus_requested` - fokus se
@@ -2200,7 +2212,7 @@ impl MainApp {
             let confirm_resp = ui.add(
                 egui::TextEdit::singleline(&mut self.guest_login.confirm)
                     .password(true)
-                    .hint_text("Zopakujte heslo")
+                    .hint_text(tr.repeat_password_hint)
                     .desired_width(f32::INFINITY),
             );
             enter_in_confirm = confirm_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -2209,7 +2221,7 @@ impl MainApp {
         self.guest_login.focus_requested = true;
 
         ui.add_space(6.0);
-        let clicked = ui.button(if vault_exists { "Přihlásit" } else { "Vytvořit trezor" }).clicked();
+        let clicked = ui.button(if vault_exists { tr.btn_login } else { tr.btn_create_vault }).clicked();
 
         if let Some(err) = self.guest_login.error.clone() {
             ui.add_space(6.0);
@@ -2218,9 +2230,7 @@ impl MainApp {
 
         if !vault_exists {
             ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("Pozor: při zapomenutí tohoto hesla se k uloženým údajům už nikdo nedostane.").small(),
-            );
+            ui.label(egui::RichText::new(tr.vault_password_warning).small());
         }
 
         if clicked || enter_in_password || enter_in_confirm {
@@ -2239,14 +2249,15 @@ impl MainApp {
         let password = std::mem::take(&mut self.guest_login.password);
         let confirm = std::mem::take(&mut self.guest_login.confirm);
 
+        let tr = i18n::t(self.settings.lang);
         let outcome = if vault_exists {
-            Vault::unlock(&self.vault_path, &password).map_err(|e| format!("Nepodařilo se odemknout trezor: {e}"))
+            Vault::unlock(&self.vault_path, &password).map_err(|e| format!("{}: {e}", tr.vault_unlock_failed))
         } else if password.is_empty() {
-            Err("Hlavní heslo nesmí být prázdné.".to_string())
+            Err(tr.main_password_empty.to_string())
         } else if password != confirm {
-            Err("Zadaná hesla se neshodují.".to_string())
+            Err(tr.passwords_mismatch.to_string())
         } else {
-            Vault::create(&self.vault_path, &password).map_err(|e| format!("Nepodařilo se vytvořit trezor: {e}"))
+            Vault::create(&self.vault_path, &password).map_err(|e| format!("{}: {e}", tr.vault_create_failed))
         };
 
         match outcome {
@@ -2265,6 +2276,7 @@ impl MainApp {
 
     fn render_folder_contents(&mut self, ui: &mut egui::Ui, node: &FolderNode, path_prefix: &str) {
         let mut actions: Vec<TreeAction> = Vec::new();
+        let tr = i18n::t(self.settings.lang);
 
         for (name, child) in &node.children {
             let full_path = if path_prefix.is_empty() { name.clone() } else { format!("{path_prefix}/{name}") };
@@ -2275,11 +2287,11 @@ impl MainApp {
             });
 
             header.header_response.context_menu(|ui| {
-                if ui.button("Přejmenovat složku...").clicked() {
+                if ui.button(tr.btn_rename_folder).clicked() {
                     actions.push(TreeAction::RenameFolder(full_path.clone()));
                     ui.close_menu();
                 }
-                if is_empty && ui.button("Smazat prázdnou složku").clicked() {
+                if is_empty && ui.button(tr.btn_delete_empty_folder).clicked() {
                     actions.push(TreeAction::DeleteFolder(full_path.clone()));
                     ui.close_menu();
                 }
@@ -2298,29 +2310,30 @@ impl MainApp {
     fn render_session_row(&mut self, ui: &mut egui::Ui, id: Uuid, actions: &mut Vec<TreeAction>) {
         let Some(session) = self.vault.data.servers.iter().find(|s| s.id == id) else { return };
         let label = format!("{}  [{}] {}:{}", session.name, session.protocol, session.host, session.port);
+        let tr = i18n::t(self.settings.lang);
 
         let response = ui.selectable_label(false, label);
         if response.double_clicked() {
             actions.push(TreeAction::Open(id));
         }
         response.context_menu(|ui| {
-            if ui.button("Otevřít").clicked() {
+            if ui.button(tr.btn_open).clicked() {
                 actions.push(TreeAction::Open(id));
                 ui.close_menu();
             }
-            if ui.button("Upravit...").clicked() {
+            if ui.button(tr.btn_edit).clicked() {
                 actions.push(TreeAction::EditSession(id));
                 ui.close_menu();
             }
-            if ui.button("Přejmenovat...").clicked() {
+            if ui.button(tr.btn_rename).clicked() {
                 actions.push(TreeAction::RenameSession(id));
                 ui.close_menu();
             }
-            if ui.button("Přesunout do složky...").clicked() {
+            if ui.button(tr.btn_move_to_folder).clicked() {
                 actions.push(TreeAction::MoveSession(id));
                 ui.close_menu();
             }
-            if ui.button("Smazat").clicked() {
+            if ui.button(tr.btn_delete).clicked() {
                 actions.push(TreeAction::DeleteSession(id));
                 ui.close_menu();
             }
@@ -2556,23 +2569,25 @@ impl TermxApp {
 
         let mut submit = false;
         let mut skip = false;
+        // Zamcena obrazovka jeste nema pristup k `Vault` (ten se
+        // odemyka az prave tady), ale `AppSettings` (vc. zvoleneho
+        // jazyka) se nacita uz pri startu (`TermxApp::new`, pred
+        // odemcenim) - viz `self.initial_settings`, takze i tato
+        // obrazovka uz muze respektovat drive zvoleny jazyk.
+        let tr = i18n::t(self.initial_settings.lang);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space((ui.available_height() / 2.0 - 160.0).max(24.0));
                 ui.heading("Term-IX");
                 ui.add_space(8.0);
-                ui.label(if vault_exists {
-                    "Zadejte hlavní heslo trezoru:"
-                } else {
-                    "Trezor ještě neexistuje – nastavte hlavní heslo:"
-                });
+                ui.label(if vault_exists { tr.lock_unlock_prompt } else { tr.lock_create_prompt });
                 ui.add_space(10.0);
 
                 let pw_resp = ui.add(
                     egui::TextEdit::singleline(&mut password)
                         .password(true)
-                        .hint_text("Hlavní heslo")
+                        .hint_text(tr.main_password_hint)
                         .desired_width(260.0),
                 );
                 // Jen jednou (pri prvnim vykresleni teto obrazovky, nebo
@@ -2590,13 +2605,13 @@ impl TermxApp {
                     ui.add(
                         egui::TextEdit::singleline(&mut confirm)
                             .password(true)
-                            .hint_text("Zopakujte heslo")
+                            .hint_text(tr.repeat_password_hint)
                             .desired_width(260.0),
                     );
                 }
 
                 ui.add_space(10.0);
-                let clicked = ui.button(if vault_exists { "Odemknout" } else { "Vytvořit trezor" }).clicked();
+                let clicked = ui.button(if vault_exists { tr.btn_unlock } else { tr.btn_create_vault }).clicked();
                 if clicked || enter_pressed {
                     submit = true;
                 }
@@ -2608,25 +2623,16 @@ impl TermxApp {
 
                 if !vault_exists {
                     ui.add_space(10.0);
-                    ui.label(
-                        egui::RichText::new("Pozor: při zapomenutí tohoto hesla se k uloženým údajům už nikdo nedostane.")
-                            .small(),
-                    );
+                    ui.label(egui::RichText::new(tr.vault_password_warning).small());
                 }
 
                 ui.add_space(18.0);
                 ui.separator();
                 ui.add_space(6.0);
-                if ui.button("Pokračovat bez hesla").clicked() {
+                if ui.button(tr.btn_continue_without_password).clicked() {
                     skip = true;
                 }
-                ui.label(
-                    egui::RichText::new(
-                        "Hostovský režim: uložené servery nejsou vidět a nová se neukládají - \
-                         jen rychlé spojení bez uložení.",
-                    )
-                    .small(),
-                );
+                ui.label(egui::RichText::new(tr.lock_guest_note).small());
             });
         });
 
@@ -2648,13 +2654,13 @@ impl TermxApp {
         }
 
         let outcome = if vault_exists {
-            Vault::unlock(&self.vault_path, &password).map_err(|e| format!("Nepodařilo se odemknout trezor: {e}"))
+            Vault::unlock(&self.vault_path, &password).map_err(|e| format!("{}: {e}", tr.vault_unlock_failed))
         } else if password.is_empty() {
-            Err("Hlavní heslo nesmí být prázdné.".to_string())
+            Err(tr.main_password_empty.to_string())
         } else if password != confirm {
-            Err("Zadaná hesla se neshodují.".to_string())
+            Err(tr.passwords_mismatch.to_string())
         } else {
-            Vault::create(&self.vault_path, &password).map_err(|e| format!("Nepodařilo se vytvořit trezor: {e}"))
+            Vault::create(&self.vault_path, &password).map_err(|e| format!("{}: {e}", tr.vault_create_failed))
         };
 
         match outcome {

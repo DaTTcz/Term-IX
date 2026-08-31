@@ -92,6 +92,7 @@ use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
 use termx_core::{AuthMethod, Session};
 use termx_ssh::{spawn_ssh_session, SshEvent, SshHandle, SshInput, SystemStats};
 
+use crate::i18n::{self, Lang};
 use crate::theme;
 
 /// Vychozi velikost terminalu ve znacich, nez se pri prvnim vykresleni
@@ -593,8 +594,9 @@ impl TerminalSession {
     /// pokoušet obnovit ztracené spojení" (viz `MainApp::settings` v
     /// `app.rs`) - samotny `TerminalSession` si zadne globalni
     /// nastaveni nedrzi, dostava ho pri kazdem vykresleni zvenci.
-    pub fn render(&mut self, ui: &mut egui::Ui, auto_reconnect: bool) {
+    pub fn render(&mut self, ui: &mut egui::Ui, auto_reconnect: bool, lang: Lang) {
         self.pump();
+        let tr = i18n::t(lang);
 
         // Behem prihlasovaciho promptu (`ConnState::AwaitingCredentials`)
         // se klavesnice zpracovava JINAK - znaky nejdou na SSH kanal
@@ -628,21 +630,21 @@ impl TerminalSession {
 
                 ui.horizontal(|ui| {
                     let message = match &self.error {
-                        Some(err) => format!("Spojení skončilo chybou: {err}"),
-                        None => "Spojení bylo ukončeno.".to_string(),
+                        Some(err) => i18n::connection_failed(lang, err),
+                        None => tr.connection_ended.to_string(),
                     };
                     ui.colored_label(theme::DANGER, message);
-                    if ui.button("🔄 Připojit znovu").clicked() {
+                    if ui.button(tr.btn_reconnect).clicked() {
                         self.reconnect();
                     }
                     if auto_reconnect {
-                        ui.label(egui::RichText::new("(automaticky se zkouší obnovit)").small().weak());
+                        ui.label(egui::RichText::new(tr.auto_reconnect_hint).small().weak());
                     }
                 });
                 ui.add_space(6.0);
             }
             ConnState::Connecting => {
-                ui.label(egui::RichText::new("Připojuji…").small());
+                ui.label(egui::RichText::new(tr.connecting_label).small());
                 ui.add_space(6.0);
             }
             ConnState::Connected => {}
@@ -653,7 +655,7 @@ impl TerminalSession {
         // prvni a prepocet velikosti terminalu uz pocital jen s tim, co
         // zbyde nad nim (presne jak to vypada na predloze z MobaXtermu -
         // proužek pod oknem terminalu, ne pres nej).
-        self.render_status_bar(ui);
+        self.render_status_bar(ui, lang);
 
         // Az TED (po pripadnych hlaskach vyse, ktere uz zabraly kus
         // plochy tohoto snimku) - viz `resize_to_fit`.
@@ -672,30 +674,21 @@ impl TerminalSession {
     /// Dokud jeste nedorazilo prvni periodicke obcerstveni statistik
     /// (`self.stats == None`, viz `pump`), proužek se vubec nezobrazuje -
     /// jednodussi a citelnejsi nez zobrazovat radek plny "-" hodnot.
-    fn render_status_bar(&self, ui: &mut egui::Ui) {
+    fn render_status_bar(&self, ui: &mut egui::Ui, lang: Lang) {
         let Some(stats) = &self.stats else { return };
+        let tr = i18n::t(lang);
 
         // (zobrazeny text, popisek do bubliny při najetí myší) - viz
         // pozadavek "najetím myši nad info proužek bychom mohli v
-        // bublině říct co dané znamená". Popisky jsou zamerne staticke
-        // texty (`&'static str`), zadna dalsi lokalizace/formatovani u
-        // nich neni potreba.
-        let mut items: Vec<(String, &'static str)> = vec![(
-            format!("🔌 {}", format_host_label(&self.session)),
-            "Adresa (hostname/IP) fyzického serveru, ke kterému je toto spojení připojeno.",
-        )];
+        // bublině říct co dané znamená".
+        let mut items: Vec<(String, &'static str)> =
+            vec![(format!("🔌 {}", format_host_label(&self.session)), tr.status_host_tooltip)];
 
         if let Some(cpu) = stats.cpu_percent {
-            items.push((
-                format!("⚙ {}%", fmt_decimal(cpu as f64, 0)),
-                "Vytížení CPU serveru (odhad z 1minutového průměru zátěže vydělený počtem jader).",
-            ));
+            items.push((format!("⚙ {}%", fmt_decimal(cpu as f64, 0)), tr.status_cpu_tooltip));
         }
         if let (Some(used), Some(total)) = (stats.mem_used_gb, stats.mem_total_gb) {
-            items.push((
-                format!("📊 {} / {} GB", fmt_decimal(used, 2), fmt_decimal(total, 2)),
-                "Využitá a celková operační paměť (RAM) serveru.",
-            ));
+            items.push((format!("📊 {} / {} GB", fmt_decimal(used, 2), fmt_decimal(total, 2)), tr.status_mem_tooltip));
         }
         if let Some(up) = stats.net_up_mbps {
             items.push((
@@ -706,17 +699,14 @@ impl TerminalSession {
                 // stejny "chybejici znak" ctverecek - matoucí presne
                 // podle zpetne vazby uzivatele.
                 format!("🔼 {} Mb/s", fmt_decimal(up, 2)),
-                "Aktuální rychlost odesílání dat ze serveru (upload).",
+                tr.status_net_up_tooltip,
             ));
         }
         if let Some(down) = stats.net_down_mbps {
-            items.push((
-                format!("🔽 {} Mb/s", fmt_decimal(down, 2)),
-                "Aktuální rychlost přijímání dat na serveru (download).",
-            ));
+            items.push((format!("🔽 {} Mb/s", fmt_decimal(down, 2)), tr.status_net_down_tooltip));
         }
         if let Some(days) = stats.uptime_days {
-            items.push((format!("🖥 {}", czech_days(days)), "Jak dlouho server běží od posledního restartu."));
+            items.push((format!("🖥 {}", i18n::uptime_days(lang, days)), tr.status_uptime_tooltip));
         }
         items.push((
             if stats.user_sessions > 1 {
@@ -724,10 +714,10 @@ impl TerminalSession {
             } else {
                 format!("👤 {}", stats.username)
             },
-            "Přihlášený uživatel a počet jeho aktivních přihlášených relací na serveru.",
+            tr.status_user_tooltip,
         ));
         if let Some(disk) = stats.disk_percent {
-            items.push((format!("💾 /: {disk}%"), "Zaplnění kořenového disku (/) na serveru."));
+            items.push((format!("💾 /: {disk}%"), tr.status_disk_tooltip));
         }
 
         egui::TopBottomPanel::bottom(egui::Id::new(("term_status_bar", self.session.id)))
@@ -828,15 +818,6 @@ fn fmt_decimal(value: f64, decimals: usize) -> String {
 
 /// Cesky sklonovany pocet dni pro dobu behu serveru (1 den, 2-4 dny, 0
 /// nebo 5 a vice dní) - pro info proužek pod terminalem.
-fn czech_days(days: u64) -> String {
-    let word = match days {
-        1 => "den",
-        2..=4 => "dny",
-        _ => "dní",
-    };
-    format!("{days} {word}")
-}
-
 fn text_format(font_id: &egui::FontId, fg: egui::Color32, bg: egui::Color32) -> egui::TextFormat {
     egui::TextFormat {
         font_id: font_id.clone(),
