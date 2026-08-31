@@ -30,13 +30,17 @@
 //! `russh` nesedi, jde o izolovanou opravu jen teto jedne funkce; zbytek
 //! (parsovani v `parse_stats`) na tom nezavisi.
 //!
-//! POZNAMKA K OVERENI (odlozene zadani prihlasovacich udaju,
-//! `SshEvent::AwaitingCredentials`/`SshInput::Credentials` v
-//! `run_session`): zadne nove `russh` API tu nepribyva - `russh::client::connect`
-//! a nasledne `handle.authenticate_password` uz byly pouzite (a tedy
-//! stejne "neoverene") i predtim, jen se mezi ne vlozilo cekani na
+//! POZNAMKA K OVERENI (odlozene zadani prihlasovacich udaju + opakovane
+//! pokusy po spatnem hesle, `SshEvent::AwaitingCredentials`/`AuthFailed`/
+//! `SshInput::Credentials` v `run_session`): zadne nove `russh` API tu
+//! nepribyva - `russh::client::connect` a nasledne
+//! `handle.authenticate_password` uz byly pouzite (a tedy stejne
+//! "neoverene") i predtim; `authenticate_password` navic uz i puvodne
+//! vracela `bool` (uspech/odmitnuti), jen se drive pri `false` rovnou
+//! ukoncila cela relace - ted se misto toho jen zopakuje cekani na
 //! `input_rx.recv()` (uz drive pouzivane v hlavni smycce nize). Jde tedy
-//! o cistě lokalizovanou zmenu poradi volani, ne o nove riziko.
+//! o cistě lokalizovanou zmenu rizeni toku (smycka misto jednoho
+//! pokusu), ne o nove riziko.
 use std::sync::Arc;
 
 use termx_core::{AuthMethod, Session};
@@ -53,15 +57,24 @@ pub enum SshEvent {
     /// chvile ma smysl zacit odesilat vstup.
     Connected,
     /// SSH transport (TCP + vymena klicu) uz je uspesne navazan, ale
-    /// `Session::auth` nemela vyplneneho uzivatele - misto okamziteho
-    /// selhani `run_session` ceka primo tady na dodatecne udaje
+    /// `Session::auth` nemela vyplneneho uzivatele (nebo predchozi
+    /// pokus o autentizaci - viz [`SshEvent::AuthFailed`] - selhal) -
+    /// `run_session` ceka primo tady na (dalsi) udaje
     /// (viz [`SshInput::Credentials`]). GUI na tuto udalost reaguje
-    /// zobrazenim prihlasovaciho formulare primo v tabu terminalu (viz
-    /// `termx-gui`, `TerminalSession::render_credentials_prompt`) -
-    /// stejne jako kdyz obycejny `ssh` klient nejdriv nekonfliktne
-    /// naváže spojení a teprve pak se lokálně zeptá na heslo.
+    /// vypsanim prihlasovaciho promptu primo do bufferu terminalu (viz
+    /// `termx-gui`, `TerminalSession::handle_credentials_keyboard`) -
+    /// stejne jako kdyz obycejny `ssh` klient nejdriv naváže spojení a
+    /// teprve pak se lokálně zeptá na heslo.
     AwaitingCredentials,
-    /// Spojeni skoncilo chybou (sitova chyba, spatne heslo, ...).
+    /// Pokus o autentizaci byl serverem odmitnut (spatne uzivatelske
+    /// jmeno/heslo) - na rozdil od [`SshEvent::Error`] tim CELA relace
+    /// NEKONCI: `run_session` posle tuto udalost a hned nato znovu
+    /// [`SshEvent::AwaitingCredentials`], takze GUI muze nabidnout
+    /// dalsi pokus bez nutnosti zakladat spojeni od znova (viz zpetna
+    /// vazba "když nemáme login úspěšný tak už se k zadání nedostaneme").
+    AuthFailed(String),
+    /// Spojeni skoncilo chybou (sitova/protokolova, ne spatne heslo -
+    /// to resi [`SshEvent::AuthFailed`]).
     Error(String),
     /// Spojeni bylo cistě ukonceno (server zavrel kanal, apod.) bez chyby.
     Closed,
@@ -377,35 +390,55 @@ async fn run_session(
         .await
         .map_err(|e| anyhow::anyhow!("SSH připojení selhalo: {e}"))?;
 
-    let (username, password) = match early_auth {
-        Some(creds) => creds,
-        None => {
-            let _ = output_tx.send(SshEvent::AwaitingCredentials);
-            loop {
-                match input_rx.recv().await {
-                    Some(SshInput::Credentials { username, password }) => break (username, password),
-                    // Zadny jiny vstup pred prihlasenim nedava smysl
-                    // (GUI zadny neposila, dokud je stav
-                    // `AwaitingCredentials`) - pro jistotu se jen
-                    // ignoruje, misto aby kvuli neocekavane zprave
-                    // spojeni rovnou spadlo.
-                    Some(_) => continue,
-                    // GUI zahodilo `input_tx` (zavreny tab) drive, nez
-                    // uzivatel neco zadal - cistě konec, nejde o chybu.
-                    None => return Ok(()),
+    // Smycka opakovanych pokusu o prihlaseni - na rozdil od puvodni
+    // verze (jeden pokus, pak bud uspech nebo `bail!` ukoncujici celou
+    // relaci) tu SPATNE heslo/jmeno relaci neukonci: posle se
+    // `SshEvent::AuthFailed` a hned nato zase `AwaitingCredentials`,
+    // takze GUI muze nabidnout dalsi pokus na stejnem, uz beziciem
+    // spojeni (viz zpetna vazba "když nemáme login úspěšný tak už se k
+    // zadání nedostaneme... zadat ho znovu nemůžeme"). Prvni kolo muze
+    // pouzit uz predem znama `early_auth` data (kdyz session mela
+    // uzivatele vyplneneho uz pri zalozeni), dalsi kola uz vzdy cekaji
+    // na `SshInput::Credentials`.
+    let mut creds = early_auth;
+    let (username, password) = loop {
+        let (username, password) = match creds.take() {
+            Some(c) => c,
+            None => {
+                let _ = output_tx.send(SshEvent::AwaitingCredentials);
+                loop {
+                    match input_rx.recv().await {
+                        Some(SshInput::Credentials { username, password }) => break (username, password),
+                        // Zadny jiny vstup pred prihlasenim nedava smysl
+                        // (GUI zadny neposila, dokud je stav
+                        // `AwaitingCredentials`) - pro jistotu se jen
+                        // ignoruje, misto aby kvuli neocekavane zprave
+                        // spojeni rovnou spadlo.
+                        Some(_) => continue,
+                        // GUI zahodilo `input_tx` (zavreny tab) drive,
+                        // nez uzivatel neco zadal - cistě konec, nejde
+                        // o chybu.
+                        None => return Ok(()),
+                    }
                 }
             }
+        };
+
+        let authenticated = handle
+            .authenticate_password(&username, &password)
+            .await
+            .map_err(|e| anyhow::anyhow!("SSH autentizace selhala: {e}"))?;
+
+        if authenticated {
+            break (username, password);
         }
+
+        // Spatne udaje - NEukoncuje relaci (na rozdil od chyby vyse),
+        // jen se zkusi znovu (dalsi pruchod smyckou zase pocka na
+        // `SshInput::Credentials`, protoze `creds` uz je `None`).
+        let _ =
+            output_tx.send(SshEvent::AuthFailed("SSH autentizace odmítnuta - zkontrolujte uživatelské jméno a heslo".to_string()));
     };
-
-    let authenticated = handle
-        .authenticate_password(&username, &password)
-        .await
-        .map_err(|e| anyhow::anyhow!("SSH autentizace selhala: {e}"))?;
-
-    if !authenticated {
-        anyhow::bail!("SSH autentizace odmítnuta - zkontrolujte uživatelské jméno a heslo");
-    }
 
     let mut channel = handle
         .channel_open_session()

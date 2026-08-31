@@ -414,16 +414,20 @@ impl TerminalSession {
                     self.awaiting_credentials = false;
                 }
                 Ok(SshEvent::AwaitingCredentials) => {
-                    self.awaiting_credentials = true;
-                    self.credentials_stage = CredentialsStage::Username;
-                    self.pending_username.clear();
-                    self.pending_password.clear();
-                    // Uvodni "prompt", rucne zapsany rovnou do stejneho
-                    // terminaloveho bufferu, ktery pak `render` normalne
-                    // vykresli - stejny text, jaky by na tomto miste
-                    // ukazal skutecny `ssh` klient. Nasleduje `pending_username`
-                    // znak po znaku (viz `handle_credentials_keyboard`).
-                    self.local_echo(b"login as: ");
+                    self.begin_credentials_prompt();
+                }
+                Ok(SshEvent::AuthFailed(_)) => {
+                    // Na rozdil od `SshEvent::Error` tohle NEukoncuje
+                    // spojeni (`termx_ssh::run_session` uz zase samo
+                    // ceka na dalsi pokus, viz tamni POZNAMKA K OVERENI) -
+                    // jen se vypise hlaska (stejna, jakou by na tomto
+                    // miste ukazal skutecny `ssh` klient) a znovu
+                    // nabidne prompt, misto aby tab spadl do
+                    // `ConnState::Disconnected` bez moznosti to rovnou
+                    // zkusit znovu - viz zpetna vazba "když nemáme login
+                    // úspěšný tak už se k zadání nedostaneme".
+                    self.local_echo(b"Permission denied, please try again.\r\n");
+                    self.begin_credentials_prompt();
                 }
                 Ok(SshEvent::Error(e)) => {
                     self.error = Some(e);
@@ -462,6 +466,22 @@ impl TerminalSession {
         for &b in bytes {
             self.parser.advance(&mut self.term, b);
         }
+    }
+
+    /// Zacne (nebo znovu zacne po odmitnutem hesle, viz
+    /// SshEvent::AuthFailed v pump) lokalni prihlasovaci prompt primo
+    /// v bufferu terminalu - sdileno mezi prvnim pokusem
+    /// (SshEvent::AwaitingCredentials) a kazdym dalsim opakovanim po
+    /// spatnem hesle, aby se oba pripady nelisily v nicem jinem nez v
+    /// tom, jestli pred timto volanim pump jeste vypise hlasku o
+    /// odmitnuti. Rozepsane udaje z pripadneho predchoziho pokusu se
+    /// zahodi - uzivatel zadava jmeno i heslo od znovu.
+    fn begin_credentials_prompt(&mut self) {
+        self.awaiting_credentials = true;
+        self.credentials_stage = CredentialsStage::Username;
+        self.pending_username.clear();
+        self.pending_password.clear();
+        self.local_echo(b"login as: ");
     }
 
     /// Zachyti klavesovy vstup z aktualniho snimku a preposle jej (jako
