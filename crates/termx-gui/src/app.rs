@@ -16,6 +16,16 @@
 //!   fungovala driv - vznikne az po uspesnem odemceni/vytvoreni trezoru
 //!   a od te chvile uz drzi `Vault` primo (ne v `Option`), takze zbytek
 //!   teto implementace se odemykanim vubec nemusi zabyvat.
+//!
+//! POZNAMKA K OVERENI (obnoveni maximalizace okna, `TermxApp::update`/
+//! `save`/`wants_maximized` a `lib.rs`): `ctx.input(|i| i.viewport().maximized)`
+//! a `egui::ViewportCommand::Maximized(bool)` jsou standardni cast
+//! viewport API zavedeneho v `egui`/`eframe` ~0.24+ (pouziva je i
+//! oficialni `eframe` priklad vlastniho ramu okna), takze by mely v
+//! pouzite verzi 0.29 byt spolehlive - ale pokud presto build selze
+//! prave na nich, jde o izolovanou opravu jen techto par mist, zbytek
+//! ukladani nastaveni (`eframe::get_value`/`set_value`) na tom
+//! nezavisi.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -46,11 +56,18 @@ pub struct AppSettings {
     /// tlacitkem primo v tabu terminalu.
     #[serde(default)]
     pub auto_reconnect: bool,
+    /// Jestli bylo hlavni okno naposledy MAXIMALIZOVANE (ne
+    /// minimalizovane - to se zamerne vubec nesleduje ani neuklada, viz
+    /// `TermxApp::update`) - obnovuje se pri pristim spusteni (viz
+    /// `lib.rs::run_app`), navic k puvodni poloze/velikosti okna, kterou
+    /// uz drive sam obnovuje `persist_window` (eframe).
+    #[serde(default)]
+    pub window_maximized: bool,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { auto_reconnect: false }
+        Self { auto_reconnect: false, window_maximized: false }
     }
 }
 
@@ -671,10 +688,16 @@ impl MainApp {
                     TabKind::Connection(id) => self.terminal_sessions.get(&id).map(|s| s.state()),
                     _ => None,
                 };
-                let mut label = egui::RichText::new(title.clone());
-                if conn_state == Some(terminal::ConnState::Disconnected) {
-                    label = label.color(theme::DANGER);
-                }
+                // Cerveny puntik pred nazvem MISTO prebarveni celeho
+                // textu tabu - `RichText::color` na zvyraznenem pozadi
+                // vybraneho tabu byl spatne citelny (zpetna vazba
+                // "barevná kombinace pro umřelý tab je nečitelná").
+                // Emoji ma vlastni pevnou barvu nezavislou na
+                // tematu/vyberu, takze zustava dobre videt v obou
+                // pripadech (vybrany i nevybrany tab).
+                let display_title =
+                    if conn_state == Some(terminal::ConnState::Disconnected) { format!("🔴 {title}") } else { title.clone() };
+                let label = egui::RichText::new(display_title);
 
                 ui.horizontal(|ui| {
                     if ui.selectable_label(selected, label).clicked() {
@@ -1942,16 +1965,16 @@ enum LockState {
     Unlocked(MainApp),
 }
 
-/// Verejny vstupni bod GUI (viz `lib.rs`). Misto aby trezor odemykalo uz
-/// `main.rs` pres cmd konzoli (`rpassword`), okno aplikace se otevre
-/// rovnou a hlavni heslo se zadava zde - v jednoduche uvodni obrazovce
-/// uvnitr okna samotneho, bez zadneho konzoloveho okna navic.
 /// Klic pod kterym se [`AppSettings`] uklada do bezneho eframe
 /// perzistentniho ulozneho prostoru (viz `TermxApp::new`/`TermxApp::save`) -
 /// samostatny od `eframe::APP_KEY` (ten by ocekaval serializaci cele
 /// `TermxApp`, coz nechceme - `Vault`/hesla v pameti tam nepatri).
 const SETTINGS_STORAGE_KEY: &str = "term-ix-settings";
 
+/// Verejny vstupni bod GUI (viz `lib.rs`). Misto aby trezor odemykalo uz
+/// `main.rs` pres cmd konzoli (`rpassword`), okno aplikace se otevre
+/// rovnou a hlavni heslo se zadava zde - v jednoduche uvodni obrazovce
+/// uvnitr okna samotneho, bez zadneho konzoloveho okna navic.
 pub struct TermxApp {
     vault_path: PathBuf,
     /// Registr modulu ceka zde, dokud se trezor neodemkne/nevytvori -
@@ -1965,6 +1988,13 @@ pub struct TermxApp {
     /// odemcenim (kdy [`MainApp`], ktery jinak drzi "zivou" kopii,
     /// jeste neexistuje).
     initial_settings: AppSettings,
+    /// Jestli je hlavni okno PRAVE TED maximalizovane - prubezne
+    /// aktualizovano kazdy snimek v `update` (viz tam) a pouzito v
+    /// `save`. Drzeno oddelene od `initial_settings`/`MainApp::settings`,
+    /// protoze se musi sledovat NEZAVISLE na tom, jestli je trezor
+    /// zamceny/odemceny (okno jde maximalizovat i na zamcene
+    /// obrazovce).
+    window_maximized: bool,
 }
 
 impl TermxApp {
@@ -1973,13 +2003,24 @@ impl TermxApp {
     /// ulozena nastaveni (viz [`AppSettings`]); kdyz zadna jeste
     /// neexistuji (prvni spusteni), pouzije se `AppSettings::default()`.
     pub fn new(vault_path: PathBuf, registry: ModuleRegistry, storage: Option<&dyn eframe::Storage>) -> Self {
-        let initial_settings = storage.and_then(|s| eframe::get_value(s, SETTINGS_STORAGE_KEY)).unwrap_or_default();
+        let initial_settings: AppSettings = storage.and_then(|s| eframe::get_value(s, SETTINGS_STORAGE_KEY)).unwrap_or_default();
+        let window_maximized = initial_settings.window_maximized;
         Self {
             vault_path,
             registry: Some(registry),
             state: LockState::Locked(LockScreen::default()),
             initial_settings,
+            window_maximized,
         }
+    }
+
+    /// `true`, kdyz uz pri startu ulozene nastaveni rika, ze bylo okno
+    /// naposledy maximalizovane - `lib.rs::run_app` podle toho hned po
+    /// vytvoreni okna posle `egui::ViewportCommand::Maximized(true)`
+    /// (samotne `persist_window`/eframe obnovuje jen polohu a velikost,
+    /// ne maximalizaci).
+    pub fn wants_maximized(&self) -> bool {
+        self.initial_settings.window_maximized
     }
 
     /// Vykresli uvodni obrazovku pro zadani (existujici trezor) nebo
@@ -2123,6 +2164,17 @@ impl TermxApp {
 
 impl eframe::App for TermxApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Prubezne sledovani, jestli je okno PRAVE TED maximalizovane -
+        // `ctx.input(|i| i.viewport().maximized)` vraci `None`, dokud to
+        // backend jeste nezjistil (typicky jen prvnich par snimku),
+        // proto se hodnota jen aktualizuje kdyz uz je znama, jinak
+        // zustava posledni znama (viz `save`). Zamerne NEsledujeme
+        // minimalizaci - uzivatel vyslovne chtel, aby se okno pri
+        // pristim spusteni nikdy neobjevilo minimalizovane.
+        if let Some(maximized) = ctx.input(|i| i.viewport().maximized) {
+            self.window_maximized = maximized;
+        }
+
         let locked = matches!(self.state, LockState::Locked(_));
         if locked {
             self.render_lock_screen(ctx);
@@ -2137,12 +2189,16 @@ impl eframe::App for TermxApp {
     /// `new` mohlo pri pristim spusteni zase nacist. Pokud uz je trezor
     /// odemceny, uklada se "ziva" kopie primo z [`MainApp`] (tam uzivatel
     /// hodnoty meni - viz `render_settings`); jinak (jeste na zamcene
-    /// obrazovce) se uklada `initial_settings` beze zmeny.
+    /// obrazovce) se uklada `initial_settings` beze zmeny. Maximalizace
+    /// okna (`self.window_maximized`, viz `update`) se do ukladane
+    /// hodnoty vzdy domicha zvlast, protoze se sleduje nezavisle na
+    /// stavu zamku.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        let settings = match &self.state {
-            LockState::Unlocked(app) => &app.settings,
-            LockState::Locked(_) => &self.initial_settings,
+        let mut settings = match &self.state {
+            LockState::Unlocked(app) => app.settings.clone(),
+            LockState::Locked(_) => self.initial_settings.clone(),
         };
-        eframe::set_value(storage, SETTINGS_STORAGE_KEY, settings);
+        settings.window_maximized = self.window_maximized;
+        eframe::set_value(storage, SETTINGS_STORAGE_KEY, &settings);
     }
 }

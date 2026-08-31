@@ -67,7 +67,17 @@ pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry) -> anyhow::Result<
         native_options,
         Box::new(move |cc| {
             theme::apply(&cc.egui_ctx);
-            Ok(Box::new(app::TermxApp::new(vault_path, registry, cc.storage)))
+            let app = app::TermxApp::new(vault_path, registry, cc.storage);
+            // `persist_window` (viz `native_options` vyse) uz sam obnovi
+            // ulozenou polohu/velikost okna, ale ne jeho maximalizaci -
+            // tu obnovime rucne, hned jak je okno vytvorene, podle
+            // naposledy ulozene hodnoty (viz `AppSettings::window_maximized`).
+            // Zamerne NEreseno pro minimalizaci - ta se vubec nesleduje
+            // ani neuklada.
+            if app.wants_maximized() {
+                cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+            Ok(Box::new(app))
         }),
     )
     .map_err(|e| anyhow::anyhow!("nepodarilo se spustit graficke rozhrani: {e}"))
