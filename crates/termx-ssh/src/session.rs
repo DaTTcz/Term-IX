@@ -392,36 +392,40 @@ async fn run_session(
 
     // Smycka opakovanych pokusu o prihlaseni - na rozdil od puvodni
     // verze (jeden pokus, pak bud uspech nebo `bail!` ukoncujici celou
-    // relaci) tu SPATNE heslo/jmeno relaci neukonci: posle se
-    // `SshEvent::AuthFailed` a hned nato zase `AwaitingCredentials`,
-    // takze GUI muze nabidnout dalsi pokus na stejnem, uz beziciem
-    // spojeni (viz zpetna vazba "když nemáme login úspěšný tak už se k
-    // zadání nedostaneme... zadat ho znovu nemůžeme"). Prvni kolo muze
-    // pouzit uz predem znama `early_auth` data (kdyz session mela
-    // uzivatele vyplneneho uz pri zalozeni), dalsi kola uz vzdy cekaji
-    // na `SshInput::Credentials`.
+    // relaci) tu SPATNE heslo/jmeno relaci neukonci: posle se jen
+    // `SshEvent::AuthFailed`, takze GUI muze nabidnout dalsi pokus na
+    // stejnem, uz beziciem spojeni (viz zpetna vazba "když nemáme
+    // login úspěšný tak už se k zadání nedostaneme... zadat ho znovu
+    // nemůžeme"). `SshEvent::AwaitingCredentials` se posila JEN JEDNOU,
+    // pred prvnim cekanim na udaje (a jen kdyz `early_auth` zadne
+    // nemá) - `AuthFailed` uz samo o sobe GUI rika, ze ma znovu
+    // nabidnout prompt (viz `pump` v termx-gui), takze opakovane
+    // posilani `AwaitingCredentials` i pri kazdem dalsim pokusu by GUI
+    // donutilo vypsat "login as: " dvakrat za sebou (drive presne
+    // takhle vznikalo zdvojene "login as: login as: ..." po kazdem
+    // spatnem hesle).
     let mut creds = early_auth;
+    if creds.is_none() {
+        let _ = output_tx.send(SshEvent::AwaitingCredentials);
+    }
     let (username, _password) = loop {
         let (username, password) = match creds.take() {
             Some(c) => c,
-            None => {
-                let _ = output_tx.send(SshEvent::AwaitingCredentials);
-                loop {
-                    match input_rx.recv().await {
-                        Some(SshInput::Credentials { username, password }) => break (username, password),
-                        // Zadny jiny vstup pred prihlasenim nedava smysl
-                        // (GUI zadny neposila, dokud je stav
-                        // `AwaitingCredentials`) - pro jistotu se jen
-                        // ignoruje, misto aby kvuli neocekavane zprave
-                        // spojeni rovnou spadlo.
-                        Some(_) => continue,
-                        // GUI zahodilo `input_tx` (zavreny tab) drive,
-                        // nez uzivatel neco zadal - cistě konec, nejde
-                        // o chybu.
-                        None => return Ok(()),
-                    }
+            None => loop {
+                match input_rx.recv().await {
+                    Some(SshInput::Credentials { username, password }) => break (username, password),
+                    // Zadny jiny vstup pred prihlasenim nedava smysl
+                    // (GUI zadny neposila, dokud je stav
+                    // `AwaitingCredentials`) - pro jistotu se jen
+                    // ignoruje, misto aby kvuli neocekavane zprave
+                    // spojeni rovnou spadlo.
+                    Some(_) => continue,
+                    // GUI zahodilo `input_tx` (zavreny tab) drive,
+                    // nez uzivatel neco zadal - cistě konec, nejde
+                    // o chybu.
+                    None => return Ok(()),
                 }
-            }
+            },
         };
 
         let authenticated = handle
