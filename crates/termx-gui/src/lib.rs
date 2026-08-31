@@ -67,8 +67,12 @@ pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry) -> anyhow::Result<
         "Term-IX",
         native_options,
         Box::new(move |cc| {
-            theme::apply(&cc.egui_ctx);
             let app = app::TermxApp::new(vault_path, registry, cc.storage);
+            // Tema se aplikuje az PO nacteni `AppSettings` (uvnitr
+            // `TermxApp::new`) - viz `TermxApp::initial_theme` - aby se
+            // uz od prvniho snimku pouzilo ulozene uzivatelovo tema, ne
+            // vzdy jen vychozi `Theme::Terminal`.
+            theme::apply(&cc.egui_ctx, app.initial_theme());
             // `persist_window` (viz `native_options` vyse) uz sam obnovi
             // ulozenou polohu/velikost okna, ale ne jeho maximalizaci -
             // tu obnovime rucne, hned jak je okno vytvorene, podle

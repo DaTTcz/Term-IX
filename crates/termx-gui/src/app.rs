@@ -77,11 +77,17 @@ pub struct AppSettings {
     /// ne chyba pri nacitani).
     #[serde(default)]
     pub lang: Lang,
+    /// Vzhled UI aplikace - viz [`crate::theme::Theme`] a pozadavek
+    /// "zkusme přidat nějaký druhý vzhled". `#[serde(default)]` ze
+    /// stejneho duvodu jako `lang` (zpetna kompatibilita se starymi
+    /// ulozenymi nastavenimi bez tohoto pole).
+    #[serde(default)]
+    pub theme: theme::Theme,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { auto_reconnect: false, window_maximized: false, lang: Lang::default() }
+        Self { auto_reconnect: false, window_maximized: false, lang: Lang::default(), theme: theme::Theme::default() }
     }
 }
 
@@ -1395,7 +1401,27 @@ impl MainApp {
         ui.add_space(12.0);
         ui.heading(tr.settings_appearance_heading);
         ui.add_space(4.0);
-        ui.label(tr.settings_theme_note);
+        ui.horizontal(|ui| {
+            ui.label(tr.settings_theme_label);
+            let prev_theme = self.settings.theme;
+            // Stejny vzor jako dropdown Jazyka vyse - zmena se ulozi do
+            // bezne `AppSettings` (preziva restart), ale navic se hned
+            // (bez cekani na dalsi start aplikace) proaktivne aplikuje
+            // pres `theme::apply` - viz pozadavek "zkusme přidat nějaký
+            // druhý vzhled ať doladíme jejich ovládání".
+            egui::ComboBox::from_id_salt("settings_theme_combo")
+                .selected_text(self.settings.theme.display_name(self.settings.lang))
+                .show_ui(ui, |ui| {
+                    for th in theme::Theme::ALL {
+                        ui.selectable_value(&mut self.settings.theme, th, th.display_name(self.settings.lang));
+                    }
+                });
+            if self.settings.theme != prev_theme {
+                theme::apply(ui.ctx(), self.settings.theme);
+            }
+        });
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(tr.settings_theme_note).small());
 
         ui.add_space(18.0);
         ui.separator();
@@ -2741,6 +2767,15 @@ impl TermxApp {
     /// ne maximalizaci).
     pub fn wants_maximized(&self) -> bool {
         self.initial_settings.window_maximized
+    }
+
+    /// Tema nactene pri startu z ulozenych `AppSettings` - `lib.rs::run_app`
+    /// ho tesne po vytvoreni teto instance aplikuje na `egui::Context`
+    /// (viz `theme::apply`), predtim nez se vubec vykresli prvni snimek,
+    /// aby uzivatel nikdy nevidel "blik" vychoziho tematu pred tim
+    /// ulozenym.
+    pub fn initial_theme(&self) -> theme::Theme {
+        self.initial_settings.theme
     }
 
     /// Vykresli uvodni obrazovku pro zadani (existujici trezor) nebo
