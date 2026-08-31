@@ -569,13 +569,14 @@ fn centered_dialog<'o>(window: egui::Window<'o>, ctx: &egui::Context) -> egui::W
     window.pivot(egui::Align2::CENTER_CENTER).current_pos(ctx.screen_rect().center())
 }
 
-/// Jiz existujici cesty slozek (`known`), ktere obsahuji aktualne
-/// napsany text v poli pro cestu slozky - podklad pro napovedu
-/// (`render_folder_suggestion_chips`) - viz pozadavek "ve formulářích
-/// bychom mohli nabízet doplňování třeba u názvů složek atd. aby
-/// nedošlo ke zdvojení". Presne aktualni hodnota se ze seznamu vyradi
+/// Jiz existujici hodnoty (`known` - cesty slozek, nazvy serveru nebo
+/// hosty, viz volajici), ktere obsahuji aktualne napsany text - podklad
+/// pro napovedu (`render_suggestion_chips`) - viz pozadavek "ve
+/// formulářích bychom mohli nabízet doplňování třeba u názvů složek
+/// atd. aby nedošlo ke zdvojení" a nasledne "stejnou nápovědu bych dal
+/// i pro název a hosta". Presne aktualni hodnota se ze seznamu vyradi
 /// (tu uz netreba nabizet - to uz je prave napsano).
-fn folder_matches(known: &[String], value: &str) -> Vec<String> {
+fn field_matches(known: &[String], value: &str) -> Vec<String> {
     let query = value.trim();
     if query.is_empty() {
         return Vec::new();
@@ -584,14 +585,14 @@ fn folder_matches(known: &[String], value: &str) -> Vec<String> {
     known.iter().filter(|f| f.as_str() != value && f.to_lowercase().contains(&query_lower)).take(6).cloned().collect()
 }
 
-/// Vykresli klikaci "chipy" s `matches` (viz `folder_matches`) - klik
-/// cele pole prepise vybranou existujici cestou, takze si uzivatel
+/// Vykresli klikaci "chipy" s `matches` (viz `field_matches`) - klik
+/// cele pole prepise vybranou existujici hodnotou, takze si uzivatel
 /// muze vybrat presne stejny zapis (velikost pismen atd.), misto aby
-/// si preklepem/jinym pripadem pismen omylem vytvoril DRUHOU, jinak
-/// pojmenovanou slozku se stejnym vyznamem. Volajici jiz sam overil
-/// `!matches.is_empty()` (viz pouziti v Gridu, kde je potreba vedet
-/// PREDEM, jestli se ma vubec pridavat dalsi radek).
-fn render_folder_suggestion_chips(ui: &mut egui::Ui, value: &mut String, matches: &[String]) {
+/// si preklepem/jinym pripadem pismen omylem vytvoril DRUHY, jinak
+/// pojmenovany zaznam se stejnym vyznamem (slozku, server...). Volajici
+/// jiz sam overil `!matches.is_empty()` (viz pouziti v Gridu, kde je
+/// potreba vedet PREDEM, jestli se ma vubec pridavat dalsi radek).
+fn render_suggestion_chips(ui: &mut egui::Ui, value: &mut String, matches: &[String]) {
     ui.horizontal_wrapped(|ui| {
         for m in matches {
             if ui.small_button(m.as_str()).clicked() {
@@ -599,6 +600,29 @@ fn render_folder_suggestion_chips(ui: &mut egui::Ui, value: &mut String, matches
             }
         }
     });
+}
+
+/// Vykresli jedno textove pole uvnitr `egui::Grid` (2 sloupce - popisek
+/// uz volajici vypsal pred timto volanim) a hned pod nim, v samostatnem
+/// radku Gridu, klikaci napovedu z `known` (viz `field_matches`/
+/// `render_suggestion_chips`), pokud je vubec co nabidnout. Zamerne BEZ
+/// podminky na fokus pole (drivejsi verze napovedu schovavala, jakmile
+/// pole ztratilo fokus - coz nastalo uz pri kliknuti na samotnou
+/// napovedu, takze zpetna vazba "když na ní kliknu zmizí ale nic se
+/// nestane" mohla pusobit, ze se nic nedeje, i kdyz hodnota pole ve
+/// skutecnosti prepsana byla) - napoveda ted zmizi jen tehdy, kdyz uz
+/// neni co nabidnout (typicky prave DIKY tomu, ze kliknuti hodnotu
+/// pole prepsalo na presne tu navrhovanou, ktera uz se sama sobe
+/// nenabizi - viz `field_matches`).
+fn grid_field_with_suggestions(ui: &mut egui::Ui, value: &mut String, known: &[String]) {
+    ui.text_edit_singleline(value);
+    ui.end_row();
+    let matches = field_matches(known, value);
+    if !matches.is_empty() {
+        ui.label("");
+        render_suggestion_chips(ui, value, &matches);
+        ui.end_row();
+    }
 }
 
 /// Cela aplikace PO uspesnem odemceni/vytvoreni trezoru (nebo po
@@ -646,7 +670,14 @@ struct MainApp {
     rename_dialog: Option<RenameDialog>,
     move_dialog: Option<MoveDialog>,
     delete_confirm: Option<DeleteTarget>,
-    change_password_dialog: Option<ChangePasswordDialog>,
+    /// Rozepsany stav zmeny hesla trezoru - na rozdil od ostatnich
+    /// "dialogovych" poli NENI `Option` (nema tedy "zavrit"/"otevrit"
+    /// stav) - zmena hesla uz neni samostatny modalni dialog otevirany
+    /// z menu, ale rovnou soucast Settings tabu (viz
+    /// `render_change_password_section` a pozadavek "V nastavení
+    /// bychom nemuseli mít podsložky Předvolby a Změnit heslo k
+    /// trezoru... vše přímo bez podsložek").
+    change_password_form: ChangePasswordDialog,
     quick_connect_form: Option<QuickConnectForm>,
     export_dialog: Option<ExportDialog>,
     import_dialog: Option<ImportDialog>,
@@ -700,7 +731,7 @@ impl MainApp {
             rename_dialog: None,
             move_dialog: None,
             delete_confirm: None,
-            change_password_dialog: None,
+            change_password_form: ChangePasswordDialog::default(),
             quick_connect_form: None,
             export_dialog: None,
             import_dialog: None,
@@ -740,7 +771,7 @@ impl MainApp {
             rename_dialog: None,
             move_dialog: None,
             delete_confirm: None,
-            change_password_dialog: None,
+            change_password_form: ChangePasswordDialog::default(),
             quick_connect_form: None,
             export_dialog: None,
             import_dialog: None,
@@ -778,7 +809,6 @@ impl MainApp {
         self.rename_dialog = None;
         self.move_dialog = None;
         self.delete_confirm = None;
-        self.change_password_dialog = None;
         self.quick_connect_form = None;
         self.export_dialog = None;
         self.import_dialog = None;
@@ -806,6 +836,31 @@ impl MainApp {
             if let Some(group) = &session.group {
                 set.insert(group.clone());
             }
+        }
+        set.into_iter().collect()
+    }
+
+    /// Vsechny jiz pouzite nazvy serveru (ulozene i docasne rychla
+    /// spojeni) - podklad pro napovedu v poli "Název:" (viz
+    /// `grid_field_with_suggestions` a pozadavek "stejnou nápovědu bych
+    /// dal i pro název a hosta").
+    fn known_session_names(&self) -> Vec<String> {
+        let mut set: std::collections::BTreeSet<String> =
+            self.vault.data.servers.iter().map(|s| s.name.clone()).collect();
+        for session in &self.ad_hoc_sessions {
+            set.insert(session.name.clone());
+        }
+        set.into_iter().collect()
+    }
+
+    /// Vsechny jiz pouzite hosty (ulozene i docasne rychla spojeni) -
+    /// podklad pro napovedu v poli "Host:" (viz `grid_field_with_suggestions`
+    /// a pozadavek "stejnou nápovědu bych dal i pro název a hosta").
+    fn known_hosts(&self) -> Vec<String> {
+        let mut set: std::collections::BTreeSet<String> =
+            self.vault.data.servers.iter().map(|s| s.host.clone()).collect();
+        for session in &self.ad_hoc_sessions {
+            set.insert(session.host.clone());
         }
         set.into_iter().collect()
     }
@@ -1094,6 +1149,8 @@ impl MainApp {
             // ohledu na to, jak siroke zrovna Home tab je.
             const HOME_FORM_WIDTH: f32 = 340.0;
             let known_folders = self.known_folder_paths();
+            let known_names = self.known_session_names();
+            let known_hosts = self.known_hosts();
             ui.horizontal(|ui| {
                 let avail = ui.available_width();
                 if avail > HOME_FORM_WIDTH {
@@ -1102,8 +1159,7 @@ impl MainApp {
                 ui.allocate_ui(egui::vec2(HOME_FORM_WIDTH, 0.0), |ui| {
                     egui::Grid::new("home_connect_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                         ui.label(tr.field_name);
-                        ui.text_edit_singleline(&mut self.home_connect_form.name);
-                        ui.end_row();
+                        grid_field_with_suggestions(ui, &mut self.home_connect_form.name, &known_names);
 
                         // Slozka dava smysl jen kdyz se bude i ukladat
                         // (viz `save` nize) - u hosta (zadny trezor) i u
@@ -1111,21 +1167,11 @@ impl MainApp {
                         // se radek vubec nezobrazi.
                         if !self.is_guest && self.home_connect_form.save {
                             ui.label(tr.field_folder);
-                            let folder_resp = ui.text_edit_singleline(&mut self.home_connect_form.folder);
-                            ui.end_row();
-                            if folder_resp.has_focus() {
-                                let matches = folder_matches(&known_folders, &self.home_connect_form.folder);
-                                if !matches.is_empty() {
-                                    ui.label("");
-                                    render_folder_suggestion_chips(ui, &mut self.home_connect_form.folder, &matches);
-                                    ui.end_row();
-                                }
-                            }
+                            grid_field_with_suggestions(ui, &mut self.home_connect_form.folder, &known_folders);
                         }
 
                         ui.label(tr.field_host);
-                        ui.text_edit_singleline(&mut self.home_connect_form.host);
-                        ui.end_row();
+                        grid_field_with_suggestions(ui, &mut self.home_connect_form.host, &known_hosts);
 
                         ui.label(tr.field_port);
                         ui.text_edit_singleline(&mut self.home_connect_form.port);
@@ -1268,6 +1314,11 @@ impl MainApp {
                     self.import_dialog = Some(ImportDialog::default());
                 }
             });
+
+            ui.add_space(18.0);
+            ui.separator();
+            ui.add_space(12.0);
+            self.render_change_password_section(ui);
         }
         ui.add_space(12.0);
         ui.label(tr.settings_theme_note);
@@ -1369,17 +1420,18 @@ impl MainApp {
                 });
                 ui.menu_button(tr.menu_view, |_ui| {});
                 ui.menu_button(tr.menu_tools, |_ui| {});
-                ui.menu_button(tr.menu_settings, |ui| {
-                    if ui.button(tr.menu_settings_preferences).clicked() {
-                        self.open_settings_tab();
-                        ui.close_menu();
-                    }
-                    if !self.is_guest && ui.button(tr.menu_settings_change_password).clicked() {
-                        self.close_all_dialogs();
-                        self.change_password_dialog = Some(ChangePasswordDialog::default());
-                        ui.close_menu();
-                    }
-                });
+                // Zpetna vazba "V nastavení bychom nemuseli mít podsložky
+                // Předvolby a Změnit heslo k trezoru... zatím tam toho
+                // nemáme tolik takže bych dal vše přímo bez podsložek" -
+                // "Nastavení" uz proto neni rozklikavaci menu se dvema
+                // polozkami, ale rovnou tlacitko, ktere primo otevre
+                // Settings tab (`open_settings_tab`); zmena hesla trezoru
+                // uz neni samostatny dialog otevirany odtud, ale soucast
+                // primo Settings tabu (`render_settings`/
+                // `render_change_password_section`).
+                if ui.button(tr.menu_settings).clicked() {
+                    self.open_settings_tab();
+                }
                 ui.menu_button(tr.menu_help, |ui| {
                     ui.label(format!("Term-IX v{}", env!("CARGO_PKG_VERSION")));
                 });
@@ -1396,6 +1448,8 @@ impl MainApp {
         let mut cancel = false;
         let tr = i18n::t(self.settings.lang);
         let known_folders = self.known_folder_paths();
+        let known_names = self.known_session_names();
+        let known_hosts = self.known_hosts();
 
         centered_dialog(egui::Window::new(tr.dialog_new_server_title), ctx)
             .collapsible(false)
@@ -1404,24 +1458,13 @@ impl MainApp {
             .show(ctx, |ui| {
                 egui::Grid::new("new_session_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label(tr.field_name);
-                    ui.text_edit_singleline(&mut form.name);
-                    ui.end_row();
+                    grid_field_with_suggestions(ui, &mut form.name, &known_names);
 
                     ui.label(tr.field_folder);
-                    let folder_resp = ui.text_edit_singleline(&mut form.folder);
-                    ui.end_row();
-                    if folder_resp.has_focus() {
-                        let matches = folder_matches(&known_folders, &form.folder);
-                        if !matches.is_empty() {
-                            ui.label("");
-                            render_folder_suggestion_chips(ui, &mut form.folder, &matches);
-                            ui.end_row();
-                        }
-                    }
+                    grid_field_with_suggestions(ui, &mut form.folder, &known_folders);
 
                     ui.label(tr.field_host);
-                    ui.text_edit_singleline(&mut form.host);
-                    ui.end_row();
+                    grid_field_with_suggestions(ui, &mut form.host, &known_hosts);
 
                     ui.label(tr.field_port);
                     ui.text_edit_singleline(&mut form.port);
@@ -1488,6 +1531,8 @@ impl MainApp {
         let mut cancel = false;
         let tr = i18n::t(self.settings.lang);
         let known_folders = self.known_folder_paths();
+        let known_names = self.known_session_names();
+        let known_hosts = self.known_hosts();
 
         centered_dialog(egui::Window::new(tr.dialog_edit_server_title), ctx)
             .collapsible(false)
@@ -1496,24 +1541,13 @@ impl MainApp {
             .show(ctx, |ui| {
                 egui::Grid::new("edit_session_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label(tr.field_name);
-                    ui.text_edit_singleline(&mut form.name);
-                    ui.end_row();
+                    grid_field_with_suggestions(ui, &mut form.name, &known_names);
 
                     ui.label(tr.field_folder);
-                    let folder_resp = ui.text_edit_singleline(&mut form.folder);
-                    ui.end_row();
-                    if folder_resp.has_focus() {
-                        let matches = folder_matches(&known_folders, &form.folder);
-                        if !matches.is_empty() {
-                            ui.label("");
-                            render_folder_suggestion_chips(ui, &mut form.folder, &matches);
-                            ui.end_row();
-                        }
-                    }
+                    grid_field_with_suggestions(ui, &mut form.folder, &known_folders);
 
                     ui.label(tr.field_host);
-                    ui.text_edit_singleline(&mut form.host);
-                    ui.end_row();
+                    grid_field_with_suggestions(ui, &mut form.host, &known_hosts);
 
                     ui.label(tr.field_port);
                     ui.text_edit_singleline(&mut form.port);
@@ -1584,12 +1618,10 @@ impl MainApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label(tr.new_folder_path_hint);
-                let value_resp = ui.text_edit_singleline(&mut value);
-                if value_resp.has_focus() {
-                    let matches = folder_matches(&known_folders, &value);
-                    if !matches.is_empty() {
-                        render_folder_suggestion_chips(ui, &mut value, &matches);
-                    }
+                ui.text_edit_singleline(&mut value);
+                let matches = field_matches(&known_folders, &value);
+                if !matches.is_empty() {
+                    render_suggestion_chips(ui, &mut value, &matches);
                 }
                 ui.horizontal(|ui| {
                     if ui.button(tr.btn_create).clicked() {
@@ -1677,12 +1709,10 @@ impl MainApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label(tr.move_folder_path_hint);
-                let value_resp = ui.text_edit_singleline(&mut dialog.value);
-                if value_resp.has_focus() {
-                    let matches = folder_matches(&known_folders, &dialog.value);
-                    if !matches.is_empty() {
-                        render_folder_suggestion_chips(ui, &mut dialog.value, &matches);
-                    }
+                ui.text_edit_singleline(&mut dialog.value);
+                let matches = field_matches(&known_folders, &dialog.value);
+                if !matches.is_empty() {
+                    render_suggestion_chips(ui, &mut dialog.value, &matches);
                 }
                 ui.horizontal(|ui| {
                     if ui.button(tr.btn_move).clicked() {
@@ -1813,80 +1843,71 @@ impl MainApp {
     /// heslem (`Vault::save`) a od te chvile drzet v pameti uz jen to
     /// nove - stare heslo se overuje porovnanim s tim, ktere uz mame
     /// od odemceni v pameti (zadny dalsi pristup na disk neni potreba).
-    fn show_change_password_dialog(&mut self, ctx: &egui::Context) {
-        let Some(mut dialog) = self.change_password_dialog.take() else { return };
-        let mut open = true;
-        let mut confirmed = false;
-        let mut cancel = false;
+    /// Zmena hlavniho hesla trezoru - soucast primo Settings tabu
+    /// (`render_settings`), ne uz samostatny modalni dialog otevirany z
+    /// menu - viz pozadavek "V nastavení bychom nemuseli mít podsložky
+    /// Předvolby a Změnit heslo k trezoru... zatím tam toho nemáme
+    /// tolik takže bych dal vše přímo bez podsložek". Trezor uz je
+    /// odemceny (drzime `Vault` primo), takze zmena hesla znamena jen
+    /// znovu zasifrovat aktualni obsah novym heslem (`Vault::save`) a
+    /// od te chvile drzet v pameti uz jen to nove - stare heslo se
+    /// overuje porovnanim s tim, ktere uz mame od odemceni v pameti
+    /// (zadny dalsi pristup na disk neni potreba).
+    fn render_change_password_section(&mut self, ui: &mut egui::Ui) {
         let tr = i18n::t(self.settings.lang);
+        let mut confirmed = false;
 
-        centered_dialog(egui::Window::new(tr.dialog_change_password_title), ctx)
-            .collapsible(false)
-            .resizable(false)
-            .open(&mut open)
-            .show(ctx, |ui| {
-                egui::Grid::new("change_password_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                    ui.label(tr.current_password_label);
-                    ui.add(egui::TextEdit::singleline(&mut dialog.old).password(true));
-                    ui.end_row();
+        ui.heading(tr.dialog_change_password_title);
+        ui.add_space(4.0);
+        egui::Grid::new("change_password_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            ui.label(tr.current_password_label);
+            ui.add(egui::TextEdit::singleline(&mut self.change_password_form.old).password(true));
+            ui.end_row();
 
-                    ui.label(tr.new_password_label);
-                    ui.add(egui::TextEdit::singleline(&mut dialog.new1).password(true));
-                    ui.end_row();
+            ui.label(tr.new_password_label);
+            ui.add(egui::TextEdit::singleline(&mut self.change_password_form.new1).password(true));
+            ui.end_row();
 
-                    ui.label(tr.repeat_new_password_label);
-                    ui.add(egui::TextEdit::singleline(&mut dialog.new2).password(true));
-                    ui.end_row();
-                });
+            ui.label(tr.repeat_new_password_label);
+            ui.add(egui::TextEdit::singleline(&mut self.change_password_form.new2).password(true));
+            ui.end_row();
+        });
 
-                if let Some(err) = &dialog.error {
-                    ui.add_space(6.0);
-                    ui.colored_label(egui::Color32::from_rgb(0xe0, 0x6c, 0x6c), err);
-                }
-
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button(tr.btn_change).clicked() {
-                        confirmed = true;
-                    }
-                    if ui.button(tr.btn_cancel).clicked() {
-                        cancel = true;
-                    }
-                });
-            });
-
-        if cancel {
-            open = false;
+        if let Some(err) = &self.change_password_form.error {
+            ui.add_space(6.0);
+            ui.colored_label(egui::Color32::from_rgb(0xe0, 0x6c, 0x6c), err);
         }
 
-        if confirmed {
-            if dialog.old != self.master_password {
-                dialog.error = Some(tr.current_password_wrong.to_string());
-                self.change_password_dialog = Some(dialog);
-                return;
+        ui.add_space(8.0);
+        if ui.button(tr.btn_change).clicked() {
+            confirmed = true;
+        }
+
+        if !confirmed {
+            return;
+        }
+
+        if self.change_password_form.old != self.master_password {
+            self.change_password_form.error = Some(tr.current_password_wrong.to_string());
+            return;
+        }
+        if self.change_password_form.new1.is_empty() {
+            self.change_password_form.error = Some(tr.new_password_empty.to_string());
+            return;
+        }
+        if self.change_password_form.new1 != self.change_password_form.new2 {
+            self.change_password_form.error = Some(tr.new_passwords_mismatch.to_string());
+            return;
+        }
+        match self.vault.save(&self.change_password_form.new1) {
+            Ok(()) => {
+                self.master_password = self.change_password_form.new1.clone();
+                self.status_message = Some(tr.vault_password_changed.to_string());
+                self.change_password_form = ChangePasswordDialog::default();
             }
-            if dialog.new1.is_empty() {
-                dialog.error = Some(tr.new_password_empty.to_string());
-                self.change_password_dialog = Some(dialog);
-                return;
+            Err(e) => {
+                self.change_password_form.error = Some(format!("{}: {e}", tr.vault_save_failed));
             }
-            if dialog.new1 != dialog.new2 {
-                dialog.error = Some(tr.new_passwords_mismatch.to_string());
-                self.change_password_dialog = Some(dialog);
-                return;
-            }
-            match self.vault.save(&dialog.new1) {
-                Ok(()) => {
-                    self.master_password = dialog.new1.clone();
-                    self.status_message = Some(tr.vault_password_changed.to_string());
-                }
-                Err(e) => {
-                    dialog.error = Some(format!("{}: {e}", tr.vault_save_failed));
-                    self.change_password_dialog = Some(dialog);
-                }
-            }
-        } else if open {
-            self.change_password_dialog = Some(dialog);
         }
     }
 
@@ -1901,6 +1922,8 @@ impl MainApp {
         let mut submit = false;
         let mut cancel = false;
         let tr = i18n::t(self.settings.lang);
+        let known_names = self.known_session_names();
+        let known_hosts = self.known_hosts();
 
         centered_dialog(egui::Window::new(tr.dialog_quick_connect_title), ctx)
             .collapsible(false)
@@ -1909,12 +1932,10 @@ impl MainApp {
             .show(ctx, |ui| {
                 egui::Grid::new("quick_connect_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.label(tr.field_name);
-                    ui.text_edit_singleline(&mut form.name);
-                    ui.end_row();
+                    grid_field_with_suggestions(ui, &mut form.name, &known_names);
 
                     ui.label(tr.field_host);
-                    ui.text_edit_singleline(&mut form.host);
-                    ui.end_row();
+                    grid_field_with_suggestions(ui, &mut form.host, &known_hosts);
 
                     ui.label(tr.field_port);
                     ui.text_edit_singleline(&mut form.port);
@@ -2524,7 +2545,6 @@ impl MainApp {
         self.show_rename_dialog(ctx);
         self.show_move_dialog(ctx);
         self.show_delete_confirm(ctx);
-        self.show_change_password_dialog(ctx);
         self.show_quick_connect_dialog(ctx);
         self.show_export_dialog(ctx);
         self.show_import_dialog(ctx);

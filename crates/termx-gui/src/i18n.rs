@@ -117,8 +117,6 @@ pub struct Strings {
     pub menu_view: &'static str,
     pub menu_tools: &'static str,
     pub menu_settings: &'static str,
-    pub menu_settings_preferences: &'static str,
-    pub menu_settings_change_password: &'static str,
     pub menu_help: &'static str,
 
     // -- taby (`MainApp::tab_title`) --
@@ -294,8 +292,6 @@ pub const CS: Strings = Strings {
     menu_view: "Zobrazení",
     menu_tools: "Nástroje",
     menu_settings: "Nastavení",
-    menu_settings_preferences: "Předvolby...",
-    menu_settings_change_password: "Změnit heslo trezoru...",
     menu_help: "Nápověda",
 
     tab_home: "Domů",
@@ -463,8 +459,6 @@ pub const EN: Strings = Strings {
     menu_view: "View",
     menu_tools: "Tools",
     menu_settings: "Settings",
-    menu_settings_preferences: "Preferences...",
-    menu_settings_change_password: "Change vault password...",
     menu_help: "Help",
 
     tab_home: "Home",
