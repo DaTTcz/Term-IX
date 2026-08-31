@@ -57,6 +57,13 @@ Zbytek aplikace (GUI, vault, update) se timto nemusi menit.
 
 ## Graficke rozhrani (termx-gui)
 
+Po splash obrazovce (viz nize) se rovnou otevre hlavni okno aplikace -
+a hned s uvodni "zamcenou" obrazovkou: pole na hlavni heslo trezoru
+(pripadne dve pole pro nastaveni hesla, pokud trezor jeste neexistuje),
+vse primo v tomto okne. Zadne cmd/konzolove okno se pro zadani hesla
+neotevira. Az po uspesnem odemceni/vytvoreni se zobrazi zbytek
+rozhrani popsany nize.
+
 Hlavni okno ma tri casti, podobne MobaXtermu:
 
 - **Horni menu** (Terminal / Sessions / View / Tools / Settings / Help)
@@ -110,13 +117,19 @@ jako samostatny modul prave kvuli tomu).
   zasifrovane**: AES-256-GCM, klic odvozeny z hlavniho hesla pomoci
   Argon2id (pomale/pametove narocne KDF - ztezuje brute-force i pri
   uniku souboru).
-- Trezor se pri kazdem startu odemyka hlavnim heslem. **Kdo hlavni
-  heslo zapomene, k ulozenym udajum se uz nedostane** - zadny reset
-  ani "zadni vratka" v aplikaci zamerne nejsou.
+- Trezor se pri kazdem startu odemyka hlavnim heslem - primo v hlavnim
+  okne aplikace (uvodni obrazovka pred zobrazenim stromu/tabu), zadne
+  cmd/konzolove okno k tomu neni potreba. Heslo lze kdykoliv zmenit
+  pres menu Settings → Změnit heslo trezoru (znovu zasifruje aktualni
+  obsah novym heslem). **Kdo hlavni heslo zapomene, k ulozenym udajum
+  se uz nedostane** - zadny reset ani "zadni vratka" v aplikaci
+  zamerne nejsou.
 - Export/import (`Vault::export` / `Vault::import`) umoznuje vytvorit
   samostatny sifrovany soubor (klidne s jinym heslem nez hlavni
-  trezor) pro prenos na jiny pocitac.
-- Vychozi umisteni trezoru: `%APPDATA%\DaTTcz\Term-IX\vault.termx`
+  trezor) pro prenos na jiny pocitac - logika hotova v `termx-vault`,
+  dialog primo v GUI je jeste navazujici krok (viz roadmap).
+- Vychozi umisteni trezoru (odvozeno z nazvu aplikace/organizace pres
+  crate `directories`): `%APPDATA%\DaTTcz\Term-IX\data\vault.termx`
   (Windows) / `~/.local/share/term-ix/vault.termx` (Linux).
 - **Znamy dluh MVP:** SSH modul zatim neoveruje otisk klice serveru
   (zadny `known_hosts`) - pripoji se k cemukoliv, co odpovi. Doplnit

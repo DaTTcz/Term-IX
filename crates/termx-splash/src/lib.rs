@@ -44,6 +44,16 @@ const CURSOR_BLINK_MS: u128 = 500;
 /// z nejakeho duvodu vysel mnohem delsi, nez se cekalo.
 const MAX_DURATION: Duration = Duration::from_millis(5000);
 
+/// Nejvetsi povoleny rozmer (sirka/vyska, cokoliv je vetsi) splash okna
+/// v pixelech. Zdrojove logo (`assets/term-ix_logo.png`) je samo o sobe
+/// 768x768 - to je v poradku pro ikony/vetsi graziku, ale jako okno by
+/// to bylo obri pres pulku obrazovky. Puvodni DPI-awareness fix (viz
+/// `main.rs`) resil jen to, ze Windows uz takove okno dal nezvetsoval -
+/// tohle je skutecna oprava zakladni velikosti: obrazek (a s nim
+/// umerne i velikost pisma/okrajů pro text) se pred vytvorenim okna
+/// zmensi na rozumnou "splash" velikost.
+const TARGET_MAX_DIM: u32 = 400;
+
 const COLOR_TEXT: u32 = 0xE8ECEF;
 const COLOR_CURSOR: u32 = 0x7FE0DC;
 
@@ -155,6 +165,19 @@ fn blend_pixel(buffer: &mut [u32], img_w: usize, x: usize, y: usize, color_rgb: 
 
 fn try_show_splash(info: &SplashInfo) -> anyhow::Result<()> {
     let img = image::load_from_memory(LOGO_BYTES)?.to_rgba8();
+
+    // Zdrojove logo zmensit na rozumnou velikost splash okna (viz
+    // `TARGET_MAX_DIM`) - beze zmeny pomeru stran, a nikdy needly
+    // (kdyby uz nekdy byl zdroj mensi, nez cilova velikost).
+    let longer_side = img.width().max(img.height());
+    let scale = if longer_side > TARGET_MAX_DIM { TARGET_MAX_DIM as f32 / longer_side as f32 } else { 1.0 };
+    let new_w = ((img.width() as f32 * scale).round() as u32).max(1);
+    let new_h = ((img.height() as f32 * scale).round() as u32).max(1);
+    let img = if scale < 1.0 {
+        image::imageops::resize(&img, new_w, new_h, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
     let (width, height) = (img.width() as usize, img.height() as usize);
 
     let base_buffer: Vec<u32> = img
@@ -170,10 +193,14 @@ fn try_show_splash(info: &SplashInfo) -> anyhow::Result<()> {
 
     let line1_text = format!("Term-IX v{}", info.version);
     let line2_text = info.author.to_string();
-    let text_px = 30.0;
+    // Velikost pisma a okraje textu se skaluji spolu s obrazkem, aby text
+    // zustal na spravnem miste a v odpovidajicim pomeru i po zmenseni loga.
+    let text_px = 30.0 * scale;
+    let margin_line1 = (92.0 * scale).round() as usize;
+    let margin_line2 = (48.0 * scale).round() as usize;
 
-    let line1 = layout_line(&font, &line1_text, text_px, width, height - 92);
-    let line2 = layout_line(&font, &line2_text, text_px, width, height - 48);
+    let line1 = layout_line(&font, &line1_text, text_px, width, height.saturating_sub(margin_line1));
+    let line2 = layout_line(&font, &line2_text, text_px, width, height.saturating_sub(margin_line2));
 
     let chars1 = line1.glyphs.len() as u128;
     let chars2 = line2.glyphs.len() as u128;

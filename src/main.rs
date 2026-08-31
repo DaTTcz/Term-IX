@@ -1,11 +1,23 @@
 //! Term-IX - binarni crate, ktery propojuje vsechny moduly dohromady:
-//! nacte/vytvori sifrovany trezor (termx-vault), zaregistruje dostupne
-//! protokolove moduly (zatim termx-ssh) do GUI (termx-gui) a pred startem
-//! zkontroluje aktualizace (termx-update).
+//! zaregistruje dostupne protokolove moduly (zatim termx-ssh) do GUI
+//! (termx-gui) a pred startem zkontroluje aktualizace (termx-update).
+//! Odemceni/vytvoreni sifrovaneho trezoru (termx-vault) uz resi az
+//! samotne GUI po otevreni hlavniho okna - zadne cmd okno k tomu neni
+//! potreba.
 //!
 //! Pridani noveho protokolu do aplikace = novy crate `termx-<protokol>`
 //! implementujici `termx_core::ProtocolModule` + jeden radek
 //! `registry.register(...)` zde.
+
+// Na Windows by binarka jinak i jako cistokrevni GUI program dostala
+// vlastni "console" subsystem, a pri kazdem spusteni by se tak na
+// pozadi otevrelo prazdne cmd okno (i kdyz uz do nej nic neprosime,
+// jako drive pres `rpassword`). Tento atribut na Windows prepne
+// binarku na "windows" subsystem, ktery zadne konzolove okno neotevira
+// - jen v ladicim (`cargo build`/`cargo run` bez `--release`) buildu ho
+// zamerne necháváme, aby byly bezne bĕhem vyvoje videt println!/log
+// hlasky z konzole. Na jinych platformach je atribut bez efektu.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Arc;
 
@@ -50,16 +62,6 @@ fn main() -> anyhow::Result<()> {
     paths.ensure_dirs()?;
     let vault_path = paths.vault_path();
 
-    let master_password = prompt_master_password(&vault_path)?;
-
-    let vault = if vault_path.exists() {
-        termx_vault::Vault::unlock(&vault_path, &master_password)
-            .map_err(|e| anyhow::anyhow!("Nepodarilo se odemknout trezor ({e}). Pri zapomenutem hesle bohuzel neexistuje zadny zpusob obnovy."))?
-    } else {
-        println!("Zadny trezor jeste neexistuje, vytvarim novy: {}", vault_path.display());
-        termx_vault::Vault::create(&vault_path, &master_password)?
-    };
-
     let mut registry = ModuleRegistry::new();
     registry.register(Arc::new(termx_ssh::SshModule::new()));
 
@@ -68,7 +70,9 @@ fn main() -> anyhow::Result<()> {
     // uz zde neni potreba tokio runtime zalozeny primo v main(); pripadne
     // asynchronni sitove operace protokolovych modulu si spousti az GUI
     // vrstva/moduly samy, az bude vestaveny terminal skutecne pripojeny.
-    termx_gui::run_app(vault, master_password, registry)
+    // Samotne odemceni/vytvoreni trezoru (drive `prompt_master_password`
+    // pres cmd konzoli) resi az GUI na uvodni obrazovce po otevreni okna.
+    termx_gui::run_app(vault_path, registry)
 }
 
 fn check_for_updates() {
@@ -84,25 +88,6 @@ fn check_for_updates() {
         Err(e) => {
             eprintln!("Kontrola aktualizaci se nezdarila, pokracuji bez ni ({e}).");
         }
-    }
-}
-
-fn prompt_master_password(vault_path: &std::path::Path) -> anyhow::Result<String> {
-    if vault_path.exists() {
-        let password = rpassword::prompt_password("Hlavni heslo trezoru: ")?;
-        Ok(password)
-    } else {
-        println!("Nastavujete hlavni heslo noveho trezoru.");
-        println!("POZOR: pri zapomenuti tohoto hesla se k ulozenym udajum jiz NIKDO nedostane.");
-        let password1 = rpassword::prompt_password("Nove hlavni heslo: ")?;
-        let password2 = rpassword::prompt_password("Zopakujte heslo: ")?;
-        if password1 != password2 {
-            anyhow::bail!("Zadana hesla se neshoduji");
-        }
-        if password1.is_empty() {
-            anyhow::bail!("Hlavni heslo nesmi byt prazdne");
-        }
-        Ok(password1)
     }
 }
 

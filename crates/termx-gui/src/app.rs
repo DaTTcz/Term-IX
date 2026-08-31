@@ -1,11 +1,24 @@
-//! Hlavni stav a vykreslovani aplikace Term-IX: horni menu, levy strom
-//! serveru/slozek, horni lista tabu a obsah aktivniho tabu.
+//! Hlavni stav a vykreslovani aplikace Term-IX: uvodni "zamcena"
+//! obrazovka pro zadani/nastaveni hlavniho hesla trezoru, a po odemceni
+//! hlavni okno - horni menu, levy strom serveru/slozek, horni lista
+//! tabu a obsah aktivniho tabu.
 //!
 //! Zamerne vse v jednom souboru (mensi riziko chyb v pravidlech
 //! viditelnosti mezi moduly, kdyz zde nejde spustit skutecny
 //! `cargo build` - viz poznamka v `lib.rs`).
+//!
+//! Strukturu tvori dve vrstvy:
+//! - [`TermxApp`] - vnejsi typ implementujici `eframe::App`, ktery jen
+//!   drzi cestu k trezoru, registr modulu (nez se preda dal) a stav
+//!   [`LockState`] (Locked/Unlocked). Zamcena obrazovka nema zadny
+//!   pristup k datum trezoru - ten jeste neni odemceny.
+//! - [`MainApp`] - puvodni "cela aplikace" (menu, strom, taby) tak, jak
+//!   fungovala driv - vznikne az po uspesnem odemceni/vytvoreni trezoru
+//!   a od te chvile uz drzi `Vault` primo (ne v `Option`), takze zbytek
+//!   teto implementace se odemykanim vubec nemusi zabyvat.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use termx_core::{AuthMethod, ModuleRegistry, Protocol, Session};
 use termx_vault::{Vault, VaultData};
@@ -62,6 +75,14 @@ enum DeleteTarget {
     Folder(String),
 }
 
+#[derive(Default)]
+struct ChangePasswordDialog {
+    old: String,
+    new1: String,
+    new2: String,
+    error: Option<String>,
+}
+
 enum TreeAction {
     Open(Uuid),
     RenameSession(Uuid),
@@ -110,7 +131,9 @@ fn build_tree(data: &VaultData) -> FolderNode {
     root
 }
 
-pub struct TermxApp {
+/// Cela aplikace PO uspesnem odemceni/vytvoreni trezoru - totozne s tim,
+/// jak vypadal puvodni `TermxApp` pred pridanim zamcene obrazovky.
+struct MainApp {
     vault: Vault,
     master_password: String,
     #[allow(dead_code)] // navazujici krok: napojeni Connection tabu na skutecny modul
@@ -124,12 +147,13 @@ pub struct TermxApp {
     rename_dialog: Option<RenameDialog>,
     move_dialog: Option<MoveDialog>,
     delete_confirm: Option<DeleteTarget>,
+    change_password_dialog: Option<ChangePasswordDialog>,
 
     status_message: Option<String>,
 }
 
-impl TermxApp {
-    pub fn new(vault: Vault, master_password: String, registry: ModuleRegistry) -> Self {
+impl MainApp {
+    fn new(vault: Vault, master_password: String, registry: ModuleRegistry) -> Self {
         Self {
             vault,
             master_password,
@@ -141,6 +165,7 @@ impl TermxApp {
             rename_dialog: None,
             move_dialog: None,
             delete_confirm: None,
+            change_password_dialog: None,
             status_message: None,
         }
     }
@@ -311,6 +336,10 @@ impl TermxApp {
                 ui.menu_button("Settings", |ui| {
                     if ui.button("Předvolby...").clicked() {
                         self.open_settings_tab();
+                        ui.close_menu();
+                    }
+                    if ui.button("Změnit heslo trezoru...").clicked() {
+                        self.change_password_dialog = Some(ChangePasswordDialog::default());
                         ui.close_menu();
                     }
                 });
@@ -575,6 +604,88 @@ impl TermxApp {
         }
     }
 
+    /// Zmena hlavniho hesla trezoru z bezicí aplikace (misto pres cmd
+    /// pri startu). Trezor uz je odemceny (drzime `Vault` primo), takze
+    /// zmena hesla znamena jen znovu zasifrovat aktualni obsah novym
+    /// heslem (`Vault::save`) a od te chvile drzet v pameti uz jen to
+    /// nove - stare heslo se overuje porovnanim s tim, ktere uz mame
+    /// od odemceni v pameti (zadny dalsi pristup na disk neni potreba).
+    fn show_change_password_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.change_password_dialog.take() else { return };
+        let mut open = true;
+        let mut confirmed = false;
+        let mut cancel = false;
+
+        egui::Window::new("Změnit heslo trezoru")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                egui::Grid::new("change_password_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                    ui.label("Současné heslo:");
+                    ui.add(egui::TextEdit::singleline(&mut dialog.old).password(true));
+                    ui.end_row();
+
+                    ui.label("Nové heslo:");
+                    ui.add(egui::TextEdit::singleline(&mut dialog.new1).password(true));
+                    ui.end_row();
+
+                    ui.label("Zopakujte nové heslo:");
+                    ui.add(egui::TextEdit::singleline(&mut dialog.new2).password(true));
+                    ui.end_row();
+                });
+
+                if let Some(err) = &dialog.error {
+                    ui.add_space(6.0);
+                    ui.colored_label(egui::Color32::from_rgb(0xe0, 0x6c, 0x6c), err);
+                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Změnit").clicked() {
+                        confirmed = true;
+                    }
+                    if ui.button("Zrušit").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if cancel {
+            open = false;
+        }
+
+        if confirmed {
+            if dialog.old != self.master_password {
+                dialog.error = Some("Současné heslo je nesprávné.".to_string());
+                self.change_password_dialog = Some(dialog);
+                return;
+            }
+            if dialog.new1.is_empty() {
+                dialog.error = Some("Nové heslo nesmí být prázdné.".to_string());
+                self.change_password_dialog = Some(dialog);
+                return;
+            }
+            if dialog.new1 != dialog.new2 {
+                dialog.error = Some("Zadaná nová hesla se neshodují.".to_string());
+                self.change_password_dialog = Some(dialog);
+                return;
+            }
+            match self.vault.save(&dialog.new1) {
+                Ok(()) => {
+                    self.master_password = dialog.new1.clone();
+                    self.status_message = Some("Heslo trezoru bylo změněno.".to_string());
+                }
+                Err(e) => {
+                    dialog.error = Some(format!("Uložení trezoru s novým heslem selhalo: {e}"));
+                    self.change_password_dialog = Some(dialog);
+                }
+            }
+        } else if open {
+            self.change_password_dialog = Some(dialog);
+        }
+    }
+
     // -- strom serveru -----------------------------------------------
 
     fn show_tree(&mut self, ui: &mut egui::Ui) {
@@ -719,7 +830,10 @@ impl TermxApp {
     }
 }
 
-impl eframe::App for TermxApp {
+impl MainApp {
+    /// Vykresli cely hlavni snimek aplikace. Neni to `eframe::App::update`
+    /// primo - o dispatch mezi zamcenou obrazovkou a touto (odemcenou)
+    /// aplikaci se stara vnejsi [`TermxApp`] nize.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.top_menu(ctx);
 
@@ -728,6 +842,7 @@ impl eframe::App for TermxApp {
         self.show_rename_dialog(ctx);
         self.show_move_dialog(ctx);
         self.show_delete_confirm(ctx);
+        self.show_change_password_dialog(ctx);
 
         egui::SidePanel::left("session_tree")
             .resizable(true)
@@ -748,5 +863,162 @@ impl eframe::App for TermxApp {
             ui.separator();
             self.active_tab_content(ui);
         });
+    }
+}
+
+// ---------------------------------------------------------------------
+// Zamcena obrazovka (zadani/nastaveni hlavniho hesla trezoru) a vnejsi
+// typ implementujici `eframe::App`.
+// ---------------------------------------------------------------------
+
+/// Stav zamcene obrazovky - jen to, co uzivatel prave pise, a pripadna
+/// chybova hlaska z posledniho pokusu.
+#[derive(Default)]
+struct LockScreen {
+    password: String,
+    confirm: String,
+    error: Option<String>,
+}
+
+enum LockState {
+    Locked(LockScreen),
+    Unlocked(MainApp),
+}
+
+/// Verejny vstupni bod GUI (viz `lib.rs`). Misto aby trezor odemykalo uz
+/// `main.rs` pres cmd konzoli (`rpassword`), okno aplikace se otevre
+/// rovnou a hlavni heslo se zadava zde - v jednoduche uvodni obrazovce
+/// uvnitr okna samotneho, bez zadneho konzoloveho okna navic.
+pub struct TermxApp {
+    vault_path: PathBuf,
+    /// Registr modulu ceka zde, dokud se trezor neodemkne/nevytvori -
+    /// pak se `take()`-ne a preda do [`MainApp`]. `Option`, aby ho bylo
+    /// mozne z `self` "vyjmout" bez klonovani (`ModuleRegistry` ho
+    /// nema).
+    registry: Option<ModuleRegistry>,
+    state: LockState,
+}
+
+impl TermxApp {
+    pub fn new(vault_path: PathBuf, registry: ModuleRegistry) -> Self {
+        Self {
+            vault_path,
+            registry: Some(registry),
+            state: LockState::Locked(LockScreen::default()),
+        }
+    }
+
+    /// Vykresli uvodni obrazovku pro zadani (existujici trezor) nebo
+    /// nastaveni (novy trezor) hlavniho hesla.
+    ///
+    /// Pozor na borrow checker: `egui::Window::open(&mut open)` si drzi
+    /// mutable pujcku `open` po celou dobu `.show(...)` (stejny problem,
+    /// jaky uz byl opraven u dialogovych oken v `MainApp` - viz tamni
+    /// poznamky), takze i zde se pracuje jen s LOKALNIMI kopiemi
+    /// (`password`, `confirm`, `error`) uvnitr UI closure, ne primo s
+    /// `self` - do `self.state` se vysledek zapise az po navratu z
+    /// `.show()`, kdy uz zadna pujcka aktivni neni.
+    fn render_lock_screen(&mut self, ctx: &egui::Context) {
+        let vault_exists = self.vault_path.exists();
+
+        let LockState::Locked(screen) = &mut self.state else { return };
+        let mut password = std::mem::take(&mut screen.password);
+        let mut confirm = std::mem::take(&mut screen.confirm);
+        let error = screen.error.clone();
+
+        let mut submit = false;
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space((ui.available_height() / 2.0 - 130.0).max(24.0));
+                ui.heading("Term-IX");
+                ui.add_space(8.0);
+                ui.label(if vault_exists {
+                    "Zadejte hlavní heslo trezoru:"
+                } else {
+                    "Trezor ještě neexistuje – nastavte hlavní heslo:"
+                });
+                ui.add_space(10.0);
+
+                let pw_resp = ui.add(
+                    egui::TextEdit::singleline(&mut password)
+                        .password(true)
+                        .hint_text("Hlavní heslo")
+                        .desired_width(260.0),
+                );
+                let enter_pressed = pw_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+                if !vault_exists {
+                    ui.add_space(4.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut confirm)
+                            .password(true)
+                            .hint_text("Zopakujte heslo")
+                            .desired_width(260.0),
+                    );
+                }
+
+                ui.add_space(10.0);
+                let clicked = ui.button(if vault_exists { "Odemknout" } else { "Vytvořit trezor" }).clicked();
+                if clicked || enter_pressed {
+                    submit = true;
+                }
+
+                if let Some(err) = &error {
+                    ui.add_space(8.0);
+                    ui.colored_label(egui::Color32::from_rgb(0xe0, 0x6c, 0x6c), err);
+                }
+
+                if !vault_exists {
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new("Pozor: při zapomenutí tohoto hesla se k uloženým údajům už nikdo nedostane.")
+                            .small(),
+                    );
+                }
+            });
+        });
+
+        // Pujcka `screen` z minula skoncila (posledni pouziti bylo pred
+        // vstupem do .show()) - muzeme si ji vzit znovu.
+        let LockState::Locked(screen) = &mut self.state else { return };
+        screen.password = password.clone();
+        screen.confirm = confirm.clone();
+
+        if !submit {
+            return;
+        }
+
+        let outcome = if vault_exists {
+            Vault::unlock(&self.vault_path, &password).map_err(|e| format!("Nepodařilo se odemknout trezor: {e}"))
+        } else if password.is_empty() {
+            Err("Hlavní heslo nesmí být prázdné.".to_string())
+        } else if password != confirm {
+            Err("Zadaná hesla se neshodují.".to_string())
+        } else {
+            Vault::create(&self.vault_path, &password).map_err(|e| format!("Nepodařilo se vytvořit trezor: {e}"))
+        };
+
+        match outcome {
+            Ok(vault) => {
+                let registry = self.registry.take().expect("registry byl jiz spotrebovan");
+                self.state = LockState::Unlocked(MainApp::new(vault, password, registry));
+            }
+            Err(e) => {
+                let LockState::Locked(screen) = &mut self.state else { return };
+                screen.error = Some(e);
+            }
+        }
+    }
+}
+
+impl eframe::App for TermxApp {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let locked = matches!(self.state, LockState::Locked(_));
+        if locked {
+            self.render_lock_screen(ctx);
+        } else if let LockState::Unlocked(app) = &mut self.state {
+            app.update(ctx, frame);
+        }
     }
 }

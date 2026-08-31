@@ -3,7 +3,9 @@
 //! Hlavni graficke uzivatelske rozhrani Term-IX (nahrazuje puvodni
 //! terminalove TUI): vlastni okno s hornim menu, levym panelem se
 //! stromem ulozenych serveru/slozek a hlavni plochou s taby (Home,
-//! Nastaveni, jednotliva spojeni).
+//! Nastaveni, jednotliva spojeni). Hlavni heslo trezoru se zadava/
+//! nastavuje primo v tomto okne (uvodni "zamcena" obrazovka) - zadne
+//! konzolove (cmd) okno k tomu neni potreba, viz [`run_app`].
 //!
 //! POZNAMKA K OVERENI: stejne jako u `termx-ssh` a `termx-splash`, ani
 //! zde nebylo v tomto prostredi mozne spustit skutecny `cargo build`
@@ -21,15 +23,21 @@
 mod app;
 mod theme;
 
+use std::path::PathBuf;
+
 use termx_core::ModuleRegistry;
-use termx_vault::Vault;
 
 const ICON_BYTES: &[u8] = include_bytes!("../../../assets/icons/hicolor/128x128/apps/term-ix.png");
 
 /// Spusti hlavni okno aplikace. Eframe si bezi ve vlastni (blokujici)
 /// smycce na aktualnim vlakne - volat primo z `main()`, ne zevnitr
 /// tokio `block_on`.
-pub fn run_app(vault: Vault, master_password: String, registry: ModuleRegistry) -> anyhow::Result<()> {
+///
+/// Na rozdil od puvodni verze uz sem `main()` nepreda uz odemceny
+/// `Vault` - jen cestu k souboru trezoru (`vault_path`). Odemceni (nebo
+/// nastaveni hesla pro novy trezor) resi az samotne GUI na uvodni
+/// obrazovce po otevreni okna.
+pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry) -> anyhow::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1150.0, 720.0])
@@ -43,7 +51,7 @@ pub fn run_app(vault: Vault, master_password: String, registry: ModuleRegistry) 
         native_options,
         Box::new(move |cc| {
             theme::apply(&cc.egui_ctx);
-            Ok(Box::new(app::TermxApp::new(vault, master_password, registry)))
+            Ok(Box::new(app::TermxApp::new(vault_path, registry)))
         }),
     )
     .map_err(|e| anyhow::anyhow!("nepodarilo se spustit graficke rozhrani: {e}"))

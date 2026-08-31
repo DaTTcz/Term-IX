@@ -52,7 +52,6 @@ path = "src/main.rs"
 
 [dependencies]
 termx-core = { workspace = true }
-termx-vault = { workspace = true }
 termx-update = { workspace = true }
 termx-ssh = { workspace = true }
 termx-splash = { workspace = true }
@@ -61,7 +60,6 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-rpassword = "7"
 
 # Vklada ikonu (assets/icons/term-ix.ico) do vysledneho .exe - resi se jen
 # pri buildu na/pro Windows, viz build.rs.
