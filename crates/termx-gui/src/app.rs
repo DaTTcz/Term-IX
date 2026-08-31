@@ -797,6 +797,19 @@ struct MainApp {
     /// rozepsany formularovy stav k zachovani/zahozeni, jen otevreno/
     /// zavreno (viz pozadavek "místo nápovědy bych dal O programu").
     about_dialog_open: bool,
+
+    /// Taby oznacene pro rozdelene zobrazeni (viz `render_split_view` a
+    /// pozadavek "dát do Zobrazení možnost zobrazit dva TABy vedle sebe...
+    /// mezi název TABu a křížku pro jeho uzavření další ikonku a když
+    /// označíme takto dva taby tak se ukáží vedle sebe"). Nejvyse 2 prvky -
+    /// pokus oznacit treti je zablokovan (viz `toggle_split_mark`).
+    split_marks: Vec<TabKind>,
+    /// Ktery z panelu rozdeleneho zobrazeni (0 = levy/prvni, 1 = pravy/
+    /// druhy z `split_marks`) prave prijima klavesovy vstup - prepina se
+    /// kliknutim do panelu nebo Ctrl+Tab (viz `render_split_view` a
+    /// globalni handler v `update`). Bez vyznamu, dokud `split_marks.len()
+    /// != 2`.
+    split_focus: usize,
 }
 
 impl MainApp {
@@ -830,6 +843,8 @@ impl MainApp {
             update_rx: None,
             status_message: None,
             about_dialog_open: false,
+            split_marks: Vec::new(),
+            split_focus: 0,
         }
     }
 
@@ -876,6 +891,8 @@ impl MainApp {
             update_rx: None,
             status_message: None,
             about_dialog_open: false,
+            split_marks: Vec::new(),
+            split_focus: 0,
         }
     }
 
@@ -993,6 +1010,12 @@ impl MainApp {
         if let TabKind::Connection(id) = self.tabs[idx] {
             self.terminal_sessions.remove(&id);
         }
+        // Zavreny tab uz nedava smysl drzet oznaceny pro rozdelene
+        // zobrazeni (viz `split_marks`/`toggle_split_mark`) - jinak by po
+        // znovuotevreni JINEHO tabu na stejnem indexu zustalo zdanlive
+        // oznaceni "viselo" na nesouvisejicim tabu.
+        let closed_kind = self.tabs[idx];
+        self.split_marks.retain(|&k| k != closed_kind);
         self.tabs.remove(idx);
         if self.tabs.is_empty() {
             self.tabs.push(TabKind::Home);
@@ -1003,6 +1026,30 @@ impl MainApp {
             self.active_tab = self.tabs.len() - 1;
         } else if self.active_tab > idx {
             self.active_tab -= 1;
+        }
+    }
+
+    /// Oznaci/odznaci `kind` pro rozdelene zobrazeni (viz `split_marks` a
+    /// ikonka "‖" v `tab_bar`). Pokud uz jsou oznacene 2 JINE taby,
+    /// oznaceni treti je podle uzivatelovy volby ("Zablokovat" - viz
+    /// pozadavek/otazka k teto funkci) ZABLOKOVANO, ne ze by se automaticky
+    /// nahradil nejstarsi - misto toho se ukaze kratka hlaska
+    /// (`status_message`, stejny mechanismus, jaky uz aplikace pouziva
+    /// jinde pro drobnou zpetnou vazbu) a uzivatel musi nejdriv rucne
+    /// odznacit jeden z existujicich dvou.
+    fn toggle_split_mark(&mut self, kind: TabKind) {
+        if let Some(pos) = self.split_marks.iter().position(|&k| k == kind) {
+            self.split_marks.remove(pos);
+            self.split_focus = 0;
+            return;
+        }
+        if self.split_marks.len() >= 2 {
+            self.status_message = Some(i18n::t(self.settings.lang).split_view_full.to_string());
+            return;
+        }
+        self.split_marks.push(kind);
+        if self.split_marks.len() == 2 {
+            self.split_focus = 1;
         }
     }
 
@@ -1079,6 +1126,41 @@ impl MainApp {
                                 to_select = Some(idx);
                             }
 
+                            // Ikonka pro oznaceni tabu do rozdeleneho
+                            // zobrazeni (viz `split_marks`/
+                            // `toggle_split_mark` a pozadavek "mezi název
+                            // TABu a křížku pro jeho uzavření další
+                            // ikonku a když označíme takto dva taby tak
+                            // se ukáží vedle sebe"). Home tab vyloucen
+                            // stejne jako "X" nize - rozdelene zobrazeni
+                            // dvou Home/Nastaveni tabu by nedavalo smysl.
+                            // "‖" (U+2016) misto napr. Unicode Dingbats/
+                            // Geometric Shapes ikon - ty se v pouzitem
+                            // pismu drive vykreslovaly jako chybejici
+                            // ctverecek (viz komentar u "X" nize).
+                            if !matches!(kind, TabKind::Home) {
+                                let marked = self.split_marks.contains(&kind);
+                                let tr = i18n::t(self.settings.lang);
+                                let hover = if marked { tr.btn_split_unmark } else { tr.btn_split_mark };
+                                let text = if marked {
+                                    egui::RichText::new("‖").small().color(theme::ACCENT)
+                                } else {
+                                    egui::RichText::new("‖").small()
+                                };
+                                let split_clicked = ui
+                                    .scope(|ui| {
+                                        let visuals = ui.visuals_mut();
+                                        visuals.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+                                        visuals.widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
+                                        ui.add(egui::Button::new(text)).on_hover_text(hover)
+                                    })
+                                    .inner
+                                    .clicked();
+                                if split_clicked {
+                                    self.toggle_split_mark(kind);
+                                }
+                            }
+
                             if !matches!(kind, TabKind::Home) {
                                 // Obycejne ASCII "X" (ne Unicode "✕"/Dingbats
                                 // "×") - to druhe se v pouzitem pismu
@@ -1133,8 +1215,29 @@ impl MainApp {
             self.tabs.push(TabKind::Home);
             self.active_tab = 0;
         }
+
+        // Kdyz jsou oznacene prave 2 taby (viz `split_marks`/
+        // `toggle_split_mark`), rozdelene zobrazeni ma prednost pred
+        // normalnim jednim aktivnim tabem - viz `render_split_view`.
+        if self.split_marks.len() == 2 {
+            self.render_split_view(ui);
+            return;
+        }
+
         let idx = self.active_tab.min(self.tabs.len() - 1);
-        match self.tabs[idx] {
+        let kind = self.tabs[idx];
+        self.render_tab_content(ui, kind, true);
+    }
+
+    /// Vykresli obsah JEDNOHO tabu (`kind`) - vytazeno z puvodniho
+    /// `active_tab_content`, aby to slo pouzit i pro oba panely
+    /// rozdeleneho zobrazeni (`render_split_view`), ne jen pro jediny
+    /// aktivni tab. `focused` viz `terminal::TerminalSession::render` -
+    /// pro Home/Nastaveni tab bez vyznamu (nemaji vlastni klavesovy
+    /// vstup navazany na SSH spojeni), predava se dal jen do
+    /// `render_connection`.
+    fn render_tab_content(&mut self, ui: &mut egui::Ui, kind: TabKind, focused: bool) {
+        match kind {
             // Home/Nastaveni si drzi puvodni odsazeni od kraju plochy
             // (vypada to prirozeneji pro text/tlacitka) - zavedeno rucne
             // tady, protoze `CentralPanel` uz zadne vlastni nema (viz
@@ -1152,8 +1255,70 @@ impl MainApp {
             // SSH terminal naopak zadne dodatecne odsazeni nema - jde az
             // ke kraji obsahove plochy (viz pozadavek "okno terminálu
             // bychom mohli dotáhnout až ke kraji").
-            TabKind::Connection(id) => self.render_connection(ui, id),
+            TabKind::Connection(id) => self.render_connection(ui, id, focused),
         }
+    }
+
+    /// Rozdelene zobrazeni dvou tabu vedle sebe (viz `split_marks` a
+    /// pozadavek "dva TABy vedle sebe... pracovat na dvou TABech
+    /// najednou"). Klavesovy vstup dostava jen panel podle `split_focus`
+    /// (0 = levy, 1 = pravy) - prepina se kliknutim kamkoliv do panelu
+    /// (`ui.interact` nize, jen jako neviditelna klikaci zona na pozadi,
+    /// aby nekolidovala s vlastnimi widgety terminalu uvnitr) nebo
+    /// globalne Ctrl+Tab (viz handler v `MainApp::update`). Fokusovany
+    /// panel ma zvyraznely (`theme::ACCENT`) okraj, aby bylo hned videt,
+    /// kam prave miri klavesnice.
+    fn render_split_view(&mut self, ui: &mut egui::Ui) {
+        let marks = self.split_marks.clone();
+        let (Some(&left), Some(&right)) = (marks.first(), marks.get(1)) else {
+            // Nemelo by nastat (volano jen kdyz `split_marks.len() == 2`) -
+            // radeji tise vykreslime jen aktualne aktivni tab (bez
+            // rekurze zpet do `active_tab_content`, ktera by za stejne
+            // podminky zavolala znovu tuto funkci) nez panikarit.
+            if !self.tabs.is_empty() {
+                let idx = self.active_tab.min(self.tabs.len() - 1);
+                let kind = self.tabs[idx];
+                self.render_tab_content(ui, kind, true);
+            }
+            return;
+        };
+        let panes = [left, right];
+
+        ui.horizontal(|ui| {
+            let total_width = ui.available_width();
+            let spacing = ui.spacing().item_spacing.x;
+            let pane_width = ((total_width - spacing) / 2.0).max(1.0);
+            let pane_height = ui.available_height();
+
+            for (i, &kind) in panes.iter().enumerate() {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(pane_width, pane_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        let rect = ui.available_rect_before_wrap();
+                        // Neviditelna klikaci zona na CELE pozadi panelu -
+                        // klik kamkoliv do panelu (mimo skutecne widgety
+                        // terminalu, ktere maji vlastni `Sense` a klik si
+                        // "schvatnou" driv) ho oznaci jako fokusovany.
+                        let bg_response = ui.interact(rect, ui.id().with(("split_pane_bg", i)), egui::Sense::click());
+                        if bg_response.clicked() {
+                            self.split_focus = i;
+                        }
+
+                        let focused = self.split_focus == i;
+                        if focused {
+                            ui.painter().rect_stroke(rect, egui::Rounding::same(2.0), egui::Stroke::new(2.0, theme::ACCENT));
+                        }
+
+                        self.render_tab_content(ui, kind, focused);
+                    },
+                );
+
+                if i == 0 {
+                    ui.separator();
+                }
+            }
+        });
     }
 
     /// Nacte logo aplikace jako GPU texturu (jen jednou, pak uz se
@@ -1516,7 +1681,7 @@ impl MainApp {
         ui.label(egui::RichText::new(tr.settings_auto_reconnect_note).small());
     }
 
-    fn render_connection(&mut self, ui: &mut egui::Ui, id: Uuid) {
+    fn render_connection(&mut self, ui: &mut egui::Ui, id: Uuid, focused: bool) {
         // `.cloned()` zamerne - `find_session` pujcuje `self` jako celek,
         // takze kdybychom si `session` drzeli jen jako referenci, nesel
         // by hned pod tim pouzit `self.terminal_sessions` (mutable
@@ -1544,7 +1709,7 @@ impl MainApp {
         self.terminal_sessions.entry(id).or_insert_with(|| terminal::TerminalSession::new(&session));
 
         if let Some(term_session) = self.terminal_sessions.get_mut(&id) {
-            term_session.render(ui, self.settings.auto_reconnect, self.settings.lang, self.settings.term_font_size);
+            term_session.render(ui, self.settings.auto_reconnect, self.settings.lang, self.settings.term_font_size, focused);
         }
     }
 
@@ -2839,6 +3004,21 @@ impl MainApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.maybe_start_update_check();
         self.poll_update_check();
+
+        // Globalni zkratka Ctrl+Tab pro prepnuti fokusu mezi panely
+        // rozdeleneho zobrazeni (viz `split_marks`/`render_split_view` a
+        // pozadavek "přepínalo by se mezi nimi tabulátorem"). Musi byt
+        // zachycena TADY (na urovni celeho `ctx`, pred vykreslenim
+        // jakehokoliv panelu), ne uvnitr `TerminalSession::handle_keyboard`
+        // - ta zpracovava jen bajty pro AKTUALNE fokusovany SSH terminal a
+        // Ctrl+Tab se z ni zamerne vyjima (viz `terminal::key_to_bytes`),
+        // aby nezpusobila i odeslani Tabu do shellu.
+        if self.split_marks.len() == 2 {
+            let ctrl_tab = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Tab));
+            if ctrl_tab {
+                self.split_focus = 1 - self.split_focus;
+            }
+        }
 
         self.top_menu(ctx);
 

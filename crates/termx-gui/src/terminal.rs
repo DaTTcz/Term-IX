@@ -614,7 +614,18 @@ impl TerminalSession {
     /// nastaveni nedrzi, dostava ho pri kazdem vykresleni zvenci. Stejne
     /// tak `font_size` (`AppSettings::term_font_size`, ovladane z
     /// Nastaveni i z View menu +/-, viz `app.rs`).
-    pub fn render(&mut self, ui: &mut egui::Ui, auto_reconnect: bool, lang: Lang, font_size: f32) {
+    ///
+    /// `focused` rika, jestli tento terminal ma prave prijimat klavesovy
+    /// vstup - v normalnim (nerozdelenem) zobrazeni je vzdy `true`, ale v
+    /// rozdelenem zobrazeni (viz `app::MainApp::render_split_view`) je
+    /// videt DVA `TerminalSession` soucasne, pricemz klavesove udalosti
+    /// snimku (`ui.input(|i| i.events...)`) jsou GLOBALNI pro cely snimek,
+    /// ne vazane na konkretni panel - bez tohoto priznaku by tak jeden
+    /// stisk klavesy odeslal stejny bajt do OBOU SSH spojeni najednou.
+    /// Vsechno ostatni (obcerstvovani obsahu, stavovy pruh, zmena
+    /// velikosti) zustava bez ohledu na `focused` - i nefokusovany panel
+    /// ma zustat "zivy" (aby v nem bylo videt novy vystup ze serveru).
+    pub fn render(&mut self, ui: &mut egui::Ui, auto_reconnect: bool, lang: Lang, font_size: f32, focused: bool) {
         self.pump();
         let tr = i18n::t(lang);
 
@@ -622,11 +633,15 @@ impl TerminalSession {
         // se klavesnice zpracovava JINAK - znaky nejdou na SSH kanal
         // (jeste neni autentizovany), ale rucne se "doopisou" primo do
         // terminaloveho bufferu, viz `handle_credentials_keyboard`. Ve
-        // vsech ostatnich stavech beze zmeny jako drive.
-        if self.state() == ConnState::AwaitingCredentials {
-            self.handle_credentials_keyboard(ui);
-        } else {
-            self.handle_keyboard(ui);
+        // vsech ostatnich stavech beze zmeny jako drive. Cele se to navic
+        // zpracuje jen kdyz je tento panel `focused` (viz komentar u
+        // signatury vyse).
+        if focused {
+            if self.state() == ConnState::AwaitingCredentials {
+                self.handle_credentials_keyboard(ui);
+            } else {
+                self.handle_keyboard(ui);
+            }
         }
 
         // Dokud je tab otevreny/aktivni, chceme obrazovku prubezne
@@ -940,6 +955,18 @@ fn indexed_color(idx: u8) -> egui::Color32 {
 /// jako ridici znak, ...).
 fn key_to_bytes(key: egui::Key, modifiers: egui::Modifiers) -> Option<Vec<u8>> {
     use egui::Key;
+
+    // Ctrl+Tab je VYHRAZENA globalni zkratka pro prepnuti fokusu mezi
+    // panely rozdeleneho zobrazeni (viz `MainApp::update`/pozadavek
+    // "mohli bychom dát do Zobrazení možnost zobrazit dva TABy vedle
+    // sebe... přepínalo by se mezi nimi tabulátorem") - bez tohoto
+    // vyjimeckeho pripadu by nize `Key::Tab => b"\t"` (kombinaci Ctrl
+    // nijak nerozlisuje) poslal i obycejny Tab do prave fokusovaneho
+    // terminalu soucasne s prepnutim panelu, coz by vypadalo jako
+    // nechtene doplneni v shellu.
+    if modifiers.ctrl && !modifiers.alt && key == Key::Tab {
+        return None;
+    }
 
     if modifiers.ctrl && !modifiers.alt {
         if let Some(code) = ctrl_control_code(key) {

@@ -144,6 +144,14 @@ pub struct Strings {
     pub tab_settings: &'static str,
     pub tab_connection_fallback: &'static str,
     pub connection_gone: &'static str,
+    /// Tooltip ikonky "‖" v `tab_bar` pro oznaceni tabu do rozdeleneho
+    /// zobrazeni (viz `MainApp::split_marks`/`toggle_split_mark`).
+    pub btn_split_mark: &'static str,
+    /// Tooltip te same ikonky, kdyz uz je tab oznaceny (klik ho odznaci).
+    pub btn_split_unmark: &'static str,
+    /// Hlaska (`status_message`) pri pokusu oznacit treti tab, kdyz uz
+    /// jsou 2 jine oznacene (viz `toggle_split_mark`).
+    pub split_view_full: &'static str,
 
     // -- dialog: Novy/Upravit server --
     pub dialog_new_server_title: &'static str,
@@ -333,6 +341,9 @@ pub const CS: Strings = Strings {
     tab_settings: "Nastavení",
     tab_connection_fallback: "Spojení",
     connection_gone: "Tento server už neexistuje (byl smazán nebo šlo o dočasné rychlé spojení, které skončilo se zavřením tabu).",
+    btn_split_mark: "Zobrazit vedle jiného tabu (rozdělené zobrazení)",
+    btn_split_unmark: "Zrušit rozdělené zobrazení",
+    split_view_full: "Pro rozdělené zobrazení jsou už označené 2 taby - nejdřív jeden z nich odznačte.",
 
     dialog_new_server_title: "Nový server",
     dialog_edit_server_title: "Upravit server",
@@ -510,6 +521,9 @@ pub const EN: Strings = Strings {
     tab_settings: "Settings",
     tab_connection_fallback: "Connection",
     connection_gone: "This server no longer exists (it was deleted, or it was a temporary quick connection that ended when its tab was closed).",
+    btn_split_mark: "Show side by side with another tab (split view)",
+    btn_split_unmark: "Turn off split view",
+    split_view_full: "2 tabs are already marked for split view - unmark one of them first.",
 
     dialog_new_server_title: "New server",
     dialog_edit_server_title: "Edit server",
