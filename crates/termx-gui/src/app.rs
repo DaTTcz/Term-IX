@@ -635,8 +635,23 @@ impl MainApp {
         }
         let idx = self.active_tab.min(self.tabs.len() - 1);
         match self.tabs[idx] {
-            TabKind::Home => self.render_home(ui),
-            TabKind::Settings => self.render_settings(ui),
+            // Home/Nastaveni si drzi puvodni odsazeni od kraju plochy
+            // (vypada to prirozeneji pro text/tlacitka) - zavedeno rucne
+            // tady, protoze `CentralPanel` uz zadne vlastni nema (viz
+            // `MainApp::update`).
+            TabKind::Home => {
+                egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                    self.render_home(ui);
+                });
+            }
+            TabKind::Settings => {
+                egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                    self.render_settings(ui);
+                });
+            }
+            // SSH terminal naopak zadne dodatecne odsazeni nema - jde az
+            // ke kraji obsahove plochy (viz pozadavek "okno terminálu
+            // bychom mohli dotáhnout až ke kraji").
             TabKind::Connection(id) => self.render_connection(ui, id),
         }
     }
@@ -791,17 +806,23 @@ impl MainApp {
         // souboru drive opraven u dialogovych oken. `Session` je levne
         // klonovatelna (`derive(Clone)` v termx-core).
         let Some(session) = self.find_session(id).cloned() else {
-            ui.label("Tento server už neexistuje (byl smazán nebo šlo o dočasné rychlé spojení, které skončilo se zavřením tabu).");
+            // Tento tab nema (na rozdil od SSH terminalu) duvod jit az
+            // ke kraji - drobne odsazeni jen pro tuto textovou hlasku.
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                ui.label("Tento server už neexistuje (byl smazán nebo šlo o dočasné rychlé spojení, které skončilo se zavřením tabu).");
+            });
             return;
         };
 
         if session.protocol != Protocol::Ssh {
-            ui.heading(&session.name);
-            ui.add_space(8.0);
-            ui.label(format!(
-                "Protokol {} zatím nemá vestavěný terminál - podporováno je prozatím jen SSH.",
-                session.protocol
-            ));
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                ui.heading(&session.name);
+                ui.add_space(8.0);
+                ui.label(format!(
+                    "Protokol {} zatím nemá vestavěný terminál - podporováno je prozatím jen SSH.",
+                    session.protocol
+                ));
+            });
             return;
         }
 
@@ -1755,11 +1776,20 @@ impl MainApp {
             });
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            self.tab_bar(ui);
-            ui.separator();
-            self.active_tab_content(ui);
-        });
+        // Bez vychoziho odsazeni (`inner_margin(Margin::same(0.0))`) -
+        // panel listy (Home/Nastaveni/spojeni) a oddelovac pod ni si
+        // sve odsazeni pridavaji zvlast (viz nize), ale obsah SSH
+        // terminalu (`render_connection`) uz ne, aby oknem terminalu
+        // slo dotahnout az ke kraji plochy (viz `active_tab_content`).
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(theme::BG_PANEL).inner_margin(egui::Margin::same(0.0)))
+            .show(ctx, |ui| {
+                egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 6.0)).show(ui, |ui| {
+                    self.tab_bar(ui);
+                });
+                ui.separator();
+                self.active_tab_content(ui);
+            });
     }
 }
 

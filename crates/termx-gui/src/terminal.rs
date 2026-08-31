@@ -94,6 +94,11 @@ const MAX_ROWS: usize = 150;
 
 const FONT_SIZE: f32 = 14.0;
 
+/// Velikost pisma info proužku pod terminalem (`render_status_bar`) -
+/// zamerne vetsi nez vychozi "male" (`RichText::small()`, ~9-10px),
+/// podle uzivatelovy zpetne vazby.
+const STATUS_BAR_FONT_SIZE: f32 = 14.0;
+
 fn terminal_font() -> egui::FontId {
     egui::FontId::monospace(FONT_SIZE)
 }
@@ -356,11 +361,17 @@ impl TerminalSession {
             .frame(
                 egui::Frame::none()
                     .fill(theme::BG_PANEL)
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0)),
+                    .inner_margin(egui::Margin::symmetric(10.0, 6.0)),
             )
             .show_separator_line(false)
             .show_inside(ui, |ui| {
-                ui.label(egui::RichText::new(parts.join("   |   ")).small());
+                // Vetsi (a ne male/`small()`) pismo na uzivatelovo prani,
+                // aby byl proužek dobre citelny i bez naklaneni se k
+                // obrazovce - `STATUS_BAR_FONT_SIZE` o kus vetsi nez
+                // vychozi velikost bezneho textu.
+                ui.label(
+                    egui::RichText::new(parts.join("   |   ")).size(STATUS_BAR_FONT_SIZE),
+                );
             });
     }
 
