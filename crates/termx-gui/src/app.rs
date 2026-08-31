@@ -688,33 +688,35 @@ impl MainApp {
                     TabKind::Connection(id) => self.terminal_sessions.get(&id).map(|s| s.state()),
                     _ => None,
                 };
-                // Cerveny vykricnik pred nazvem MISTO prebarveni celeho
-                // textu tabu - `RichText::color` na cele textu na
-                // zvyraznenem (vybranem) pozadi tabu byl spatne citelny
-                // (zpetna vazba "barevná kombinace pro umřelý tab je
-                // nečitelná"). Zkouseno i emoji 🔴 (cerveny puntik) misto
-                // vykricniku, ale v pouzitem pismu se vykresluje v bezne
-                // (bile) textove barve, ne ve sve vlastni cervene - viz
-                // dalsi zpetna vazba "červený puntík nezčervenal, je
-                // pořád bílý". `LayoutJob` zde barvi VYLUCNE ten
-                // vykricnik (obycejny ASCII znak, spolehlivy napric
-                // vsemi pismy - na rozdil od Unicode "Geometric Shapes"
-                // znaku jako ▲/▼/●, ktere v tomto pismu chybely uplne),
-                // zbytek nazvu zustava v bezne barve.
-                let label: egui::WidgetText = if conn_state == Some(terminal::ConnState::Disconnected) {
-                    let mut job = egui::text::LayoutJob::default();
-                    job.append("! ", 0.0, egui::TextFormat { color: theme::DANGER, ..Default::default() });
-                    job.append(&title, 0.0, egui::TextFormat { color: theme::TEXT, ..Default::default() });
-                    job.into()
-                } else {
-                    egui::RichText::new(title.clone()).into()
-                };
+                let is_dead = conn_state == Some(terminal::ConnState::Disconnected);
+                let label = egui::RichText::new(title.clone());
 
                 ui.horizontal(|ui| {
+                    // Cerveny puntik pred nazvem "mrtveho" tabu - vykresleny
+                    // PRIMO (`painter().circle_filled`), ne jako textovy
+                    // znak. Puvodni pokusy textovymi znaky selhaly ze dvou
+                    // ruznych duvodu: emoji 🔴 se v pouzitem pismu
+                    // vykreslilo v bezne (bile), ne vlastni cervene barve
+                    // (zpetna vazba "červený puntík nezčervenal, je pořád
+                    // bílý"), a nasledny ASCII vykricnik zase byl na
+                    // vlastni obarveni prilis maly/nenapadny (zpetna vazba
+                    // "tohle není vidět"). Vykresleny kruh na zadnem pismu
+                    // vubec nezavisi, takze je zaruceno, ze bude presne v
+                    // pozadovane barve a velikosti.
+                    if is_dead {
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, ui.spacing().interact_size.y), egui::Sense::hover());
+                        ui.painter().circle_filled(rect.center(), 4.0, theme::DANGER);
+                        ui.add_space(2.0);
+                    }
                     if ui.selectable_label(selected, label).clicked() {
                         to_select = Some(idx);
                     }
-                    if !matches!(kind, TabKind::Home) && ui.small_button("✕").clicked() {
+                    // Obycejne ASCII "X" (ne Unicode "✕"/Dingbats "×") -
+                    // to druhe se v pouzitem pismu vykreslovalo jako
+                    // ctverecek (chybejici znak), viz zpetna vazba
+                    // "ikonka vedle tabu co ho zavírá by měla mít křížek
+                    // místo čtverečku".
+                    if !matches!(kind, TabKind::Home) && ui.small_button("X").clicked() {
                         if conn_state == Some(terminal::ConnState::Connected) {
                             to_confirm_close = Some(CloseTabConfirm { idx, title });
                         } else {
