@@ -152,11 +152,19 @@ pub struct TerminalSession {
     /// snimku nezmenila).
     cols: usize,
     rows: usize,
-    /// Jmeno ulozeneho spojeni (viz `Session::name`) - zobrazuje se v
-    /// info proužku pod terminalem (`render_status_bar`), aby bylo na
-    /// prvni pohled jasne, ke kteremu serveru statistiky patri (uzitecne
-    /// zejmena kdyz ma uzivatel otevrenych vic Connection tabu najednou).
-    session_name: String,
+    /// Identifikator teto SSH relace (`Session::id`) - pouzity jen jako
+    /// stabilni a napric relacemi jednoznacny `egui::Id` pro info
+    /// proužek (`render_status_bar`), aby se pripadne shody v
+    /// `host_label` (dve relace na stejny hostname/IP) nemohly poplest.
+    session_id: uuid::Uuid,
+    /// Adresa (hostname/IP), pripadne i port (kdyz neni vychozich 22),
+    /// fyzickeho serveru, ke kteremu je toto spojeni pripojeno - na
+    /// rozdil od `Session::name` (libovolny popisek zvoleny uzivatelem
+    /// pri ulozeni spojeni) jde o to, co se skutecne pouziva k
+    /// pripojeni. Zobrazuje se v info proužku pod terminalem
+    /// (`render_status_bar`), aby bylo na prvni pohled jasne, ke
+    /// kteremu fyzickemu serveru statistiky patri.
+    host_label: String,
     /// Posledni prijate systemove metriky (viz `termx_ssh::SystemStats`) -
     /// `None`, dokud po pripojeni jeste nedorazilo prvni periodicke
     /// obcerstveni (viz `SshEvent::Stats` v `pump`); do te doby se info
@@ -172,6 +180,12 @@ impl TerminalSession {
         let size = TermSize { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
         let term = Term::new(TermConfig::default(), &size, EventProxy);
         let handle = spawn_ssh_session(session.clone(), DEFAULT_COLS as u16, DEFAULT_ROWS as u16);
+        let host_label = if session.port == 22 {
+            session.host.clone()
+        } else {
+            format!("{}:{}", session.host, session.port)
+        };
+
         Self {
             term,
             parser: Processor::new(),
@@ -180,7 +194,8 @@ impl TerminalSession {
             error: None,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
-            session_name: session.name.clone(),
+            session_id: session.id,
+            host_label,
             stats: None,
         }
     }
@@ -337,8 +352,8 @@ impl TerminalSession {
         // texty (`&'static str`), zadna dalsi lokalizace/formatovani u
         // nich neni potreba.
         let mut items: Vec<(String, &'static str)> = vec![(
-            format!("🔌 {}", self.session_name),
-            "Název tohoto uloženého spojení.",
+            format!("🔌 {}", self.host_label),
+            "Adresa (hostname/IP) fyzického serveru, ke kterému je toto spojení připojeno.",
         )];
 
         if let Some(cpu) = stats.cpu_percent {
@@ -355,13 +370,19 @@ impl TerminalSession {
         }
         if let Some(up) = stats.net_up_mbps {
             items.push((
-                format!("▲ {} Mb/s", fmt_decimal(up, 2)),
+                // `🔼`/`🔽` (ne geometricke `▲`/`▼`) zamerne - `▲`/`▼`
+                // patri do bloku "Geometric Shapes", ktery v pisme
+                // pouzivanem pro tyto ikonky (stejne jako `🔌`/`⚙`/`📊`/
+                // `🖥`/`👤`/`💾`) chybel, takze se obe vykreslovaly jako
+                // stejny "chybejici znak" ctverecek - matoucí presne
+                // podle zpetne vazby uzivatele.
+                format!("🔼 {} Mb/s", fmt_decimal(up, 2)),
                 "Aktuální rychlost odesílání dat ze serveru (upload).",
             ));
         }
         if let Some(down) = stats.net_down_mbps {
             items.push((
-                format!("▼ {} Mb/s", fmt_decimal(down, 2)),
+                format!("🔽 {} Mb/s", fmt_decimal(down, 2)),
                 "Aktuální rychlost přijímání dat na serveru (download).",
             ));
         }
@@ -380,7 +401,7 @@ impl TerminalSession {
             items.push((format!("💾 /: {disk}%"), "Zaplnění kořenového disku (/) na serveru."));
         }
 
-        egui::TopBottomPanel::bottom(egui::Id::new(("term_status_bar", &self.session_name)))
+        egui::TopBottomPanel::bottom(egui::Id::new(("term_status_bar", self.session_id)))
             .frame(
                 egui::Frame::none()
                     .fill(theme::BG_PANEL)
