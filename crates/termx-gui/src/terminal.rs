@@ -331,30 +331,53 @@ impl TerminalSession {
     fn render_status_bar(&self, ui: &mut egui::Ui) {
         let Some(stats) = &self.stats else { return };
 
-        let mut parts: Vec<String> = vec![format!("🔌 {}", self.session_name)];
+        // (zobrazeny text, popisek do bubliny při najetí myší) - viz
+        // pozadavek "najetím myši nad info proužek bychom mohli v
+        // bublině říct co dané znamená". Popisky jsou zamerne staticke
+        // texty (`&'static str`), zadna dalsi lokalizace/formatovani u
+        // nich neni potreba.
+        let mut items: Vec<(String, &'static str)> = vec![(
+            format!("🔌 {}", self.session_name),
+            "Název tohoto uloženého spojení.",
+        )];
 
         if let Some(cpu) = stats.cpu_percent {
-            parts.push(format!("⚙ {}%", fmt_decimal(cpu as f64, 0)));
+            items.push((
+                format!("⚙ {}%", fmt_decimal(cpu as f64, 0)),
+                "Vytížení CPU serveru (odhad z 1minutového průměru zátěže vydělený počtem jader).",
+            ));
         }
         if let (Some(used), Some(total)) = (stats.mem_used_gb, stats.mem_total_gb) {
-            parts.push(format!("📊 {} / {} GB", fmt_decimal(used, 2), fmt_decimal(total, 2)));
+            items.push((
+                format!("📊 {} / {} GB", fmt_decimal(used, 2), fmt_decimal(total, 2)),
+                "Využitá a celková operační paměť (RAM) serveru.",
+            ));
         }
         if let Some(up) = stats.net_up_mbps {
-            parts.push(format!("▲ {} Mb/s", fmt_decimal(up, 2)));
+            items.push((
+                format!("▲ {} Mb/s", fmt_decimal(up, 2)),
+                "Aktuální rychlost odesílání dat ze serveru (upload).",
+            ));
         }
         if let Some(down) = stats.net_down_mbps {
-            parts.push(format!("▼ {} Mb/s", fmt_decimal(down, 2)));
+            items.push((
+                format!("▼ {} Mb/s", fmt_decimal(down, 2)),
+                "Aktuální rychlost přijímání dat na serveru (download).",
+            ));
         }
         if let Some(days) = stats.uptime_days {
-            parts.push(format!("🖥 {}", czech_days(days)));
+            items.push((format!("🖥 {}", czech_days(days)), "Jak dlouho server běží od posledního restartu."));
         }
-        parts.push(if stats.user_sessions > 1 {
-            format!("👤 {} (x{})", stats.username, stats.user_sessions)
-        } else {
-            format!("👤 {}", stats.username)
-        });
+        items.push((
+            if stats.user_sessions > 1 {
+                format!("👤 {} (x{})", stats.username, stats.user_sessions)
+            } else {
+                format!("👤 {}", stats.username)
+            },
+            "Přihlášený uživatel a počet jeho aktivních přihlášených relací na serveru.",
+        ));
         if let Some(disk) = stats.disk_percent {
-            parts.push(format!("💾 /: {disk}%"));
+            items.push((format!("💾 /: {disk}%"), "Zaplnění kořenového disku (/) na serveru."));
         }
 
         egui::TopBottomPanel::bottom(egui::Id::new(("term_status_bar", &self.session_name)))
@@ -365,13 +388,18 @@ impl TerminalSession {
             )
             .show_separator_line(false)
             .show_inside(ui, |ui| {
-                // Vetsi (a ne male/`small()`) pismo na uzivatelovo prani,
-                // aby byl proužek dobre citelny i bez naklaneni se k
-                // obrazovce - `STATUS_BAR_FONT_SIZE` o kus vetsi nez
-                // vychozi velikost bezneho textu.
-                ui.label(
-                    egui::RichText::new(parts.join("   |   ")).size(STATUS_BAR_FONT_SIZE),
-                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    // Kazda polozka je VLASTNI label (ne jeden spojeny
+                    // retezec jako driv), aby na ni slo napojit vlastni
+                    // bublinu (`on_hover_text`) - viz `items` vyse.
+                    for (idx, (text, tooltip)) in items.iter().enumerate() {
+                        if idx > 0 {
+                            ui.label(egui::RichText::new("|").size(STATUS_BAR_FONT_SIZE).weak());
+                        }
+                        ui.label(egui::RichText::new(text).size(STATUS_BAR_FONT_SIZE)).on_hover_text(*tooltip);
+                    }
+                });
             });
     }
 
