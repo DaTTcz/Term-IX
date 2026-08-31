@@ -569,6 +569,38 @@ fn centered_dialog<'o>(window: egui::Window<'o>, ctx: &egui::Context) -> egui::W
     window.pivot(egui::Align2::CENTER_CENTER).current_pos(ctx.screen_rect().center())
 }
 
+/// Jiz existujici cesty slozek (`known`), ktere obsahuji aktualne
+/// napsany text v poli pro cestu slozky - podklad pro napovedu
+/// (`render_folder_suggestion_chips`) - viz pozadavek "ve formulářích
+/// bychom mohli nabízet doplňování třeba u názvů složek atd. aby
+/// nedošlo ke zdvojení". Presne aktualni hodnota se ze seznamu vyradi
+/// (tu uz netreba nabizet - to uz je prave napsano).
+fn folder_matches(known: &[String], value: &str) -> Vec<String> {
+    let query = value.trim();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let query_lower = query.to_lowercase();
+    known.iter().filter(|f| f.as_str() != value && f.to_lowercase().contains(&query_lower)).take(6).cloned().collect()
+}
+
+/// Vykresli klikaci "chipy" s `matches` (viz `folder_matches`) - klik
+/// cele pole prepise vybranou existujici cestou, takze si uzivatel
+/// muze vybrat presne stejny zapis (velikost pismen atd.), misto aby
+/// si preklepem/jinym pripadem pismen omylem vytvoril DRUHOU, jinak
+/// pojmenovanou slozku se stejnym vyznamem. Volajici jiz sam overil
+/// `!matches.is_empty()` (viz pouziti v Gridu, kde je potreba vedet
+/// PREDEM, jestli se ma vubec pridavat dalsi radek).
+fn render_folder_suggestion_chips(ui: &mut egui::Ui, value: &mut String, matches: &[String]) {
+    ui.horizontal_wrapped(|ui| {
+        for m in matches {
+            if ui.small_button(m.as_str()).clicked() {
+                *value = m.clone();
+            }
+        }
+    });
+}
+
 /// Cela aplikace PO uspesnem odemceni/vytvoreni trezoru (nebo po
 /// vstupu do hostovskeho rezimu, viz `is_guest`) - totozne s tim, jak
 /// vypadal puvodni `TermxApp` pred pridanim zamcene obrazovky.
@@ -759,6 +791,23 @@ impl MainApp {
     /// za nim ulozeny nebo jednorazovy server.
     fn find_session(&self, id: Uuid) -> Option<&Session> {
         self.vault.data.servers.iter().find(|s| s.id == id).or_else(|| self.ad_hoc_sessions.iter().find(|s| s.id == id))
+    }
+
+    /// Vsechny jiz existujici cesty slozek v trezoru - jak explicitne
+    /// ulozene prazdne slozky (`vault.data.folders`), tak cesty pouzite
+    /// nejakym serverem (`Session::group`). Podklad pro napovedu v poli
+    /// "Složka:"/"Cesta..." ve formularich (viz `render_folder_suggestions`
+    /// a pozadavek "ve formulářích bychom mohli nabízet doplňování třeba
+    /// u názvů složek atd. aby nedošlo ke zdvojení") - `BTreeSet` dava
+    /// bez dalsi prace serazeny seznam bez duplicit.
+    fn known_folder_paths(&self) -> Vec<String> {
+        let mut set: std::collections::BTreeSet<String> = self.vault.data.folders.iter().cloned().collect();
+        for session in &self.vault.data.servers {
+            if let Some(group) = &session.group {
+                set.insert(group.clone());
+            }
+        }
+        set.into_iter().collect()
     }
 
     // -- taby ---------------------------------------------------------
@@ -1044,6 +1093,7 @@ impl MainApp {
             // (`ui.add_space`) - tim se cely blok manualne vystredi bez
             // ohledu na to, jak siroke zrovna Home tab je.
             const HOME_FORM_WIDTH: f32 = 340.0;
+            let known_folders = self.known_folder_paths();
             ui.horizontal(|ui| {
                 let avail = ui.available_width();
                 if avail > HOME_FORM_WIDTH {
@@ -1061,8 +1111,16 @@ impl MainApp {
                         // se radek vubec nezobrazi.
                         if !self.is_guest && self.home_connect_form.save {
                             ui.label(tr.field_folder);
-                            ui.text_edit_singleline(&mut self.home_connect_form.folder);
+                            let folder_resp = ui.text_edit_singleline(&mut self.home_connect_form.folder);
                             ui.end_row();
+                            if folder_resp.has_focus() {
+                                let matches = folder_matches(&known_folders, &self.home_connect_form.folder);
+                                if !matches.is_empty() {
+                                    ui.label("");
+                                    render_folder_suggestion_chips(ui, &mut self.home_connect_form.folder, &matches);
+                                    ui.end_row();
+                                }
+                            }
                         }
 
                         ui.label(tr.field_host);
@@ -1337,6 +1395,7 @@ impl MainApp {
         let mut submit = false;
         let mut cancel = false;
         let tr = i18n::t(self.settings.lang);
+        let known_folders = self.known_folder_paths();
 
         centered_dialog(egui::Window::new(tr.dialog_new_server_title), ctx)
             .collapsible(false)
@@ -1349,8 +1408,16 @@ impl MainApp {
                     ui.end_row();
 
                     ui.label(tr.field_folder);
-                    ui.text_edit_singleline(&mut form.folder);
+                    let folder_resp = ui.text_edit_singleline(&mut form.folder);
                     ui.end_row();
+                    if folder_resp.has_focus() {
+                        let matches = folder_matches(&known_folders, &form.folder);
+                        if !matches.is_empty() {
+                            ui.label("");
+                            render_folder_suggestion_chips(ui, &mut form.folder, &matches);
+                            ui.end_row();
+                        }
+                    }
 
                     ui.label(tr.field_host);
                     ui.text_edit_singleline(&mut form.host);
@@ -1420,6 +1487,7 @@ impl MainApp {
         let mut submit = false;
         let mut cancel = false;
         let tr = i18n::t(self.settings.lang);
+        let known_folders = self.known_folder_paths();
 
         centered_dialog(egui::Window::new(tr.dialog_edit_server_title), ctx)
             .collapsible(false)
@@ -1432,8 +1500,16 @@ impl MainApp {
                     ui.end_row();
 
                     ui.label(tr.field_folder);
-                    ui.text_edit_singleline(&mut form.folder);
+                    let folder_resp = ui.text_edit_singleline(&mut form.folder);
                     ui.end_row();
+                    if folder_resp.has_focus() {
+                        let matches = folder_matches(&known_folders, &form.folder);
+                        if !matches.is_empty() {
+                            ui.label("");
+                            render_folder_suggestion_chips(ui, &mut form.folder, &matches);
+                            ui.end_row();
+                        }
+                    }
 
                     ui.label(tr.field_host);
                     ui.text_edit_singleline(&mut form.host);
@@ -1500,6 +1576,7 @@ impl MainApp {
         let mut confirmed = false;
         let mut cancel = false;
         let tr = i18n::t(self.settings.lang);
+        let known_folders = self.known_folder_paths();
 
         centered_dialog(egui::Window::new(tr.dialog_new_folder_title), ctx)
             .collapsible(false)
@@ -1507,7 +1584,13 @@ impl MainApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label(tr.new_folder_path_hint);
-                ui.text_edit_singleline(&mut value);
+                let value_resp = ui.text_edit_singleline(&mut value);
+                if value_resp.has_focus() {
+                    let matches = folder_matches(&known_folders, &value);
+                    if !matches.is_empty() {
+                        render_folder_suggestion_chips(ui, &mut value, &matches);
+                    }
+                }
                 ui.horizontal(|ui| {
                     if ui.button(tr.btn_create).clicked() {
                         confirmed = true;
@@ -1586,6 +1669,7 @@ impl MainApp {
         let mut confirmed = false;
         let mut cancel = false;
         let tr = i18n::t(self.settings.lang);
+        let known_folders = self.known_folder_paths();
 
         centered_dialog(egui::Window::new(tr.dialog_move_title), ctx)
             .collapsible(false)
@@ -1593,7 +1677,13 @@ impl MainApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label(tr.move_folder_path_hint);
-                ui.text_edit_singleline(&mut dialog.value);
+                let value_resp = ui.text_edit_singleline(&mut dialog.value);
+                if value_resp.has_focus() {
+                    let matches = folder_matches(&known_folders, &dialog.value);
+                    if !matches.is_empty() {
+                        render_folder_suggestion_chips(ui, &mut dialog.value, &matches);
+                    }
+                }
                 ui.horizontal(|ui| {
                     if ui.button(tr.btn_move).clicked() {
                         confirmed = true;
