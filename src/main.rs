@@ -27,6 +27,13 @@ struct Cli {
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::try_init().ok();
+    // Bez tohoto volani Windows u DPI-nevedomych aplikaci sam "roztahuje"
+    // vykreslene okno podle systemoveho meritka (typicky 125/150/200 %),
+    // takze napr. splash okno vypada 2x vetsi a rozmazane, nez jak bylo
+    // vykresleno. Musi se volat driv, nez se otevre prvni okno.
+    #[cfg(target_os = "windows")]
+    set_process_dpi_aware();
+
     let cli = Cli::parse();
 
     if !cli.no_splash {
@@ -98,5 +105,21 @@ fn prompt_master_password(vault_path: &std::path::Path) -> anyhow::Result<String
             anyhow::bail!("Hlavni heslo nesmi byt prazdne");
         }
         Ok(password1)
+    }
+}
+
+/// Rekne Windows, ze si o vlastni vykreslovani/meritko umime rozhodnout
+/// sami (DPI-aware), aby nas nezacal automaticky "roztahovat" bitmapove
+/// podle systemoveho meritka zobrazeni. Volana FFI funkce (`user32.dll`)
+/// je soucasti Win32 API od Windows Vista, zadna dalsi zavislost neni
+/// potreba.
+#[cfg(target_os = "windows")]
+fn set_process_dpi_aware() {
+    #[link(name = "user32")]
+    extern "system" {
+        fn SetProcessDPIAware() -> i32;
+    }
+    unsafe {
+        SetProcessDPIAware();
     }
 }

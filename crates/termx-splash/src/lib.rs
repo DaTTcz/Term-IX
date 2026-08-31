@@ -35,8 +35,9 @@ const TYPE_INTERVAL_MS: u128 = 32;
 /// v terminalu, kdyz uzivatel na chvili zastavi.
 const LINE_PAUSE_MS: u128 = 220;
 /// Jak dlouho jeste zustane okno otevrene po dopsani textu (kurzor
-/// mezitim par-krat blikne), nez se samo zavre.
-const IDLE_HOLD_MS: u128 = 900;
+/// mezitim par-krat blikne), nez se samo zavre - dost casu, aby si
+/// clovek stihl precist verzi/autora.
+const IDLE_HOLD_MS: u128 = 2000;
 /// Jak casto blika kurzor, kdyz zrovna nic nepise (viditelny/skryty).
 const CURSOR_BLINK_MS: u128 = 500;
 /// Bezpecnostni strop celkove doby zobrazeni, i kdyby vypocet casovani
