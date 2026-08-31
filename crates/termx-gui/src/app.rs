@@ -732,11 +732,27 @@ impl MainApp {
                                 // Obycejne ASCII "X" (ne Unicode "✕"/Dingbats
                                 // "×") - to druhe se v pouzitem pismu
                                 // vykreslovalo jako ctverecek (chybejici
-                                // znak). `.frame(false)` - zadne vlastni
-                                // (oddelene) pozadi tlacitka, splyne s
-                                // `Frame` vyse.
-                                let close_clicked =
-                                    ui.add(egui::Button::new(egui::RichText::new("X").small()).frame(false)).clicked();
+                                // znak). V klidu (bez najeti mysi) zadne
+                                // vlastni pozadi nema, aby splyvalo s
+                                // `Frame` vyse - ale na rozdil od drivejsiho
+                                // `.frame(false)` (ktere VYPINALO uplne
+                                // celou vizualizaci vc. najeti mysi) se ted
+                                // jen ve `scope` docasne "vynuluje" barva
+                                // KLIDOVEHO pozadi tlacitka, takze vychozi
+                                // podbarveni pri najeti mysi (uz ted
+                                // pouzivane jinde v aplikaci, viz
+                                // `theme::apply`) zustava funkcni - zpetna
+                                // vazba "při přejetí myší by se mohla
+                                // ikonka zavření podbarvit".
+                                let close_clicked = ui
+                                    .scope(|ui| {
+                                        let visuals = ui.visuals_mut();
+                                        visuals.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+                                        visuals.widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
+                                        ui.add(egui::Button::new(egui::RichText::new("X").small()))
+                                    })
+                                    .inner
+                                    .clicked();
                                 if close_clicked {
                                     if conn_state == Some(terminal::ConnState::Connected) {
                                         to_confirm_close = Some(CloseTabConfirm { idx, title: title.clone() });
@@ -1297,8 +1313,15 @@ impl MainApp {
     fn show_close_tab_confirm(&mut self, ctx: &egui::Context) {
         let Some(confirm) = self.close_tab_confirm.take() else { return };
         let mut open = true;
-        let mut confirmed = false;
-        let mut cancel = false;
+        // Enter = potvrdit zavreni, Esc = zrusit (zavrit dialog beze
+        // zmeny) - viz pozadavek "enter potvrdí zavření, esc zmizí
+        // dialog". Cteno primo z `ctx` (ne z konkretniho widgetu uvnitr
+        // okna), protoze v tomto dialogu neni zadne textove pole, ktere
+        // by melo fokus drzet - okno je jedine otevrene modalni okno v
+        // danou chvili, takze globalni stisk klavesy tady jednoznacne
+        // patri jemu.
+        let mut confirmed = ctx.input(|i| i.key_pressed(egui::Key::Enter));
+        let mut cancel = ctx.input(|i| i.key_pressed(egui::Key::Escape));
 
         centered_dialog(egui::Window::new("Zavřít spojení"), ctx).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
             ui.label(format!("Spojení „{}“ je právě aktivní. Opravdu chcete tab zavřít a spojení ukončit?", confirm.title));
