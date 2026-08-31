@@ -688,16 +688,27 @@ impl MainApp {
                     TabKind::Connection(id) => self.terminal_sessions.get(&id).map(|s| s.state()),
                     _ => None,
                 };
-                // Cerveny puntik pred nazvem MISTO prebarveni celeho
-                // textu tabu - `RichText::color` na zvyraznenem pozadi
-                // vybraneho tabu byl spatne citelny (zpetna vazba
-                // "barevná kombinace pro umřelý tab je nečitelná").
-                // Emoji ma vlastni pevnou barvu nezavislou na
-                // tematu/vyberu, takze zustava dobre videt v obou
-                // pripadech (vybrany i nevybrany tab).
-                let display_title =
-                    if conn_state == Some(terminal::ConnState::Disconnected) { format!("🔴 {title}") } else { title.clone() };
-                let label = egui::RichText::new(display_title);
+                // Cerveny vykricnik pred nazvem MISTO prebarveni celeho
+                // textu tabu - `RichText::color` na cele textu na
+                // zvyraznenem (vybranem) pozadi tabu byl spatne citelny
+                // (zpetna vazba "barevná kombinace pro umřelý tab je
+                // nečitelná"). Zkouseno i emoji 🔴 (cerveny puntik) misto
+                // vykricniku, ale v pouzitem pismu se vykresluje v bezne
+                // (bile) textove barve, ne ve sve vlastni cervene - viz
+                // dalsi zpetna vazba "červený puntík nezčervenal, je
+                // pořád bílý". `LayoutJob` zde barvi VYLUCNE ten
+                // vykricnik (obycejny ASCII znak, spolehlivy napric
+                // vsemi pismy - na rozdil od Unicode "Geometric Shapes"
+                // znaku jako ▲/▼/●, ktere v tomto pismu chybely uplne),
+                // zbytek nazvu zustava v bezne barve.
+                let label: egui::WidgetText = if conn_state == Some(terminal::ConnState::Disconnected) {
+                    let mut job = egui::text::LayoutJob::default();
+                    job.append("! ", 0.0, egui::TextFormat { color: theme::DANGER, ..Default::default() });
+                    job.append(&title, 0.0, egui::TextFormat { color: theme::TEXT, ..Default::default() });
+                    job.into()
+                } else {
+                    egui::RichText::new(title.clone()).into()
+                };
 
                 ui.horizontal(|ui| {
                     if ui.selectable_label(selected, label).clicked() {
