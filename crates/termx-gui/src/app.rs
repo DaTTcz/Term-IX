@@ -2255,31 +2255,41 @@ impl MainApp {
         let logo = self.logo_texture(ctx);
 
         centered_dialog(egui::Window::new(tr.about_dialog_title), ctx).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+            // Cely obsah dialogu (vc. odkazu na GitHub a tlacitka
+            // kontroly aktualizaci nize) uvnitr JEDNOHO
+            // `vertical_centered` - drive byly odkaz/tlacitko/stav
+            // aktualizace mimo tento blok, takze zustavaly pribite k
+            // levemu okraji dialogu, zatimco logo/verze nad nimi byly
+            // vystredene (zpetna vazba "texty vystředit, ted jsou
+            // namačkané vlevo"). Logo se navic zvetsilo na stejnou
+            // velikost, jakou pouziva Home tab (`render_home`, 220x220 -
+            // zpetna vazba "stejně velký obrázek jak máme na home tabu"),
+            // misto puvodnich 96x96.
             ui.vertical_centered(|ui| {
                 if let Some(logo) = logo {
-                    ui.add(egui::Image::new(&logo).max_size(egui::vec2(96.0, 96.0)));
+                    ui.add(egui::Image::new(&logo).max_size(egui::vec2(220.0, 220.0)));
                     ui.add_space(6.0);
                 }
                 ui.label(format!("{} {}", tr.version_label, env!("CARGO_PKG_VERSION")));
                 ui.label(egui::RichText::new("DaTTcz").small());
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                ui.hyperlink_to(tr.about_github_link, "https://github.com/DaTTcz/Term-IX");
+
+                ui.add_space(10.0);
+                if ui.button(tr.btn_check_updates).clicked() {
+                    // Na rozdil od `maybe_start_update_check` (Home tab, viz
+                    // `render_home`) BEZ podminky na `UpdateCheck::NotStarted` -
+                    // rucni tlacitko ma jit spustit kdykoliv znovu, i kdyz uz
+                    // nejaky vysledek existuje.
+                    self.start_update_check();
+                }
+                ui.add_space(4.0);
+                self.render_update_check_status(ui);
             });
-
-            ui.add_space(10.0);
-            ui.separator();
-            ui.add_space(10.0);
-
-            ui.hyperlink_to(tr.about_github_link, "https://github.com/DaTTcz/Term-IX");
-
-            ui.add_space(10.0);
-            if ui.button(tr.btn_check_updates).clicked() {
-                // Na rozdil od `maybe_start_update_check` (Home tab, viz
-                // `render_home`) BEZ podminky na `UpdateCheck::NotStarted` -
-                // rucni tlacitko ma jit spustit kdykoliv znovu, i kdyz uz
-                // nejaky vysledek existuje.
-                self.start_update_check();
-            }
-            ui.add_space(4.0);
-            self.render_update_check_status(ui);
         });
 
         if !open {
