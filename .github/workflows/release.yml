@@ -27,7 +27,7 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Systemove -dev knihovny potrebne k SLINKOVANI eframe/egui (glow +
       # winit, X11 backend) na ubuntu-latest bezerou - na rozdil od
@@ -68,7 +68,7 @@ jobs:
           echo "ASSET=$asset" >> "$GITHUB_ENV"
 
       - name: Nahrat do GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ env.ASSET }}
           draft: false
