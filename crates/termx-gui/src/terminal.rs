@@ -41,6 +41,17 @@
 //!      `egui` byla nahrazena konstantou `Frame::NONE`), staci upravit
 //!      jen toto jedno volani; zbytek proužku (skladani `parts` do
 //!      textu) na tom nezavisi.
+//!   8. (nove, oznaceni textu mysi + Ctrl+C/Ctrl+V) `TerminalSession::render_grid`
+//!      nahradilo puvodni `ui.add(Label::new(job).selectable(false))`
+//!      rucnim `ui.fonts(|f| f.layout_job(job))` + `ui.painter().galley(...)`,
+//!      aby slo presne mapovat pozici mysi na bunku mrizky. Vsechny
+//!      pouzite metody (`Fonts::layout_job`, `Painter::galley`,
+//!      `Context::copy_text`, `Context::set_cursor_icon`, `Event::Copy`)
+//!      byly u verze egui 0.29.1 overeny primo v jeji dokumentaci
+//!      (docs.rs) - narozdil od `alacritty_terminal` tady tedy jde o
+//!      relativne nizke riziko. Pokud by presto `copy_text`/`Event::Copy`
+//!      v pouzite verzi chybely, nejpravdepodobnejsi nahrada je starsi
+//!      `ctx.output_mut(|o| o.copied_text = text)`.
 //! Rucni/automaticke znovupripojeni (`reconnect`/`maybe_auto_reconnect`,
 //! viz nize) zadne nove nejiste API nepridava - jen znovu vola uz
 //! overene `spawn_ssh_session`/`Term::new` se stejnymi parametry jako
@@ -82,6 +93,12 @@
 //!   spousteni na uplne samostatnem tokio tasku se sdilenym stavem.
 //!   Nez po pripojeni dorazi prvni sada statistik, proužek se
 //!   nezobrazuje vubec.
+//! - Oznaceni textu mysi (`Selection`) funguje jen v ramci AKTUALNE
+//!   VIDITELNE obrazovky (stejny souradnicovy prostor jako `build_layout_job`) -
+//!   do scrollbacku (mimo viditelnou cast, kdyby ho `alacritty_terminal`
+//!   drzel) nedosahne. Je to LINEARNI vyber po radcich (jako Windows
+//!   Terminal/gnome-terminal), ne "blokovy" obdelnikovy vyber (jako
+//!   napr. Alt+tazeni v nekterych terminalech).
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
@@ -269,6 +286,57 @@ pub struct TerminalSession {
     /// stisknuti Enter na konci hesla odesle (`submit_credentials`).
     pending_username: String,
     pending_password: String,
+    /// Aktivni oznaceni textu tazenim mysi (`None` kdyz nic neni
+    /// oznaceno) - viz `handle_selection_input`/`selected_text`. Kliknuti
+    /// bez tazeni oznaceni zrusi (stejne jako v kazdem beznem terminalu).
+    selection: Option<Selection>,
+}
+
+/// Oznaceny usek textu v terminalu, v souradnicich viditelne obrazovky
+/// (radek/sloupec) - stejny prostor, jaky pouziva smycka v
+/// `build_layout_job` (`0..grid.screen_lines()` / `0..grid.columns()`).
+/// `anchor` je bunka, kde tazeni zacalo, `current` kam mys aktualne (nebo
+/// naposledy behem tazeni) ukazovala - poradi mezi nimi NENI zarucene
+/// (uzivatel muze tahnout jak doprava-dolu, tak doleva-nahoru), proto
+/// `normalized` pro skutecne pouziti (zvyrazneni, extrakce textu).
+#[derive(Debug, Clone, Copy)]
+struct Selection {
+    anchor: (usize, usize),
+    current: (usize, usize),
+}
+
+impl Selection {
+    /// Vrati (start, konec) serazene tak, ze `start <= konec` v poradi
+    /// (radek, sloupec) - tuple uz ma spravne lexikograficke porovnani
+    /// vestavene, presne odpovidajici poradi znaku v terminalu.
+    fn normalized(&self) -> ((usize, usize), (usize, usize)) {
+        if self.anchor <= self.current {
+            (self.anchor, self.current)
+        } else {
+            (self.current, self.anchor)
+        }
+    }
+
+    /// Je dana bunka (radek, sloupec) soucasti oznaceni? Linearni vyber po
+    /// radcich (ne "blokovy" obdelnikovy) - stejne chovani jako
+    /// vetsina beznych terminalu (Windows Terminal, gnome-terminal, ...):
+    /// prvni oznaceny radek od pocatecniho sloupce do konce, prostredni
+    /// radky cele, posledni radek od zacatku do koncoveho sloupce.
+    fn contains(&self, row: usize, col: usize) -> bool {
+        let (start, end) = self.normalized();
+        if row < start.0 || row > end.0 {
+            return false;
+        }
+        if start.0 == end.0 {
+            col >= start.1 && col <= end.1
+        } else if row == start.0 {
+            col >= start.1
+        } else if row == end.0 {
+            col <= end.1
+        } else {
+            true
+        }
+    }
 }
 
 impl TerminalSession {
@@ -301,6 +369,7 @@ impl TerminalSession {
             credentials_stage: CredentialsStage::Username,
             pending_username: String::new(),
             pending_password: String::new(),
+            selection: None,
         }
     }
 
@@ -357,6 +426,10 @@ impl TerminalSession {
         self.error = None;
         self.stats = None;
         self.last_reconnect_attempt = Some(std::time::Instant::now());
+        // Oznaceni odkazovalo na obsah PREDCHOZI obrazovky (ktera se prave
+        // zahodila spolu s `self.term`) - po znovupripojeni uz nedava
+        // smysl.
+        self.selection = None;
     }
 
     /// Kdyz je automaticke obnoveni v Nastaveni zapnute (`enabled`),
@@ -505,16 +578,48 @@ impl TerminalSession {
 
     /// Zachyti klavesovy vstup z aktualniho snimku a preposle jej (jako
     /// syrove bajty/ANSI escape sekvence) do SSH spojeni.
-    fn handle_keyboard(&self, ui: &egui::Ui) {
+    ///
+    /// Ctrl+C (na Macu Cmd+C) je zvlastni pripad - v beznem terminalu bez
+    /// oznaceneho textu posila SIGINT (0x03), ale kdyz je NECO OZNACENO
+    /// (`self.selection`, viz `handle_selection_input`), ma se misto toho
+    /// zkopirovat oznaceny text do schranky - presne jak se chova
+    /// Windows Terminal, VS Code i vetsina modernich terminalu. Rozlisuje
+    /// se pres vysokourovnovou udalost `egui::Event::Copy` (kterou
+    /// backend generuje pro platformni zkratku kopirovani - Ctrl+C i
+    /// Cmd+C - NAVIC vedle syrove `Event::Key`), ne rucnim resenim
+    /// modifikatoru u `Key::C`.
+    fn handle_keyboard(&mut self, ui: &egui::Ui) {
         let events = ui.input(|i| i.events.clone());
+
+        // Zjisti se PRED hlavnim pruchodem, aby vetev `Event::Key` nize
+        // vedela, ze se ma odpovidajici "syrovy" stisk Ctrl+C/Cmd+C
+        // preskocit (jinak by se poslalo SIGINT NAVIC k jiz provedenemu
+        // kopirovani - obe udalosti prichazeji ve stejnem snimku).
+        let copy_handled = if self.selection.is_some() && events.iter().any(|e| matches!(e, egui::Event::Copy)) {
+            if let Some(text) = self.selected_text() {
+                ui.ctx().copy_text(text);
+            }
+            self.selection = None;
+            true
+        } else {
+            false
+        };
+
         for event in events {
             match event {
                 // Bezny text (pismena, cislice, mezera, diakritika, ...) -
                 // egui uz sam rozlisuje "napsatelny" text od ridicich
                 // klaves, takze staci poslat rovnou.
                 egui::Event::Text(text) => self.send_bytes(text.into_bytes()),
+                // Vlozeni ze schranky (Ctrl+V/Cmd+V) - viz i vyjimka pro
+                // `Key::V` v `key_to_bytes` nize, ktera brani tomu, aby se
+                // NAVIC poslal i syrovy ridici bajt 0x16 za tento vlozeny
+                // text.
                 egui::Event::Paste(text) => self.send_bytes(text.into_bytes()),
                 egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                    if copy_handled && key == egui::Key::C && modifiers.ctrl {
+                        continue;
+                    }
                     if let Some(bytes) = key_to_bytes(key, modifiers) {
                         self.send_bytes(bytes);
                     }
@@ -533,6 +638,11 @@ impl TerminalSession {
     /// (take stejne jako u `ssh`) vubec neechuje - zadny znak, zadna
     /// hvezdicka; i Backspace pri psani hesla zustava tiche (jen zmensi
     /// `pending_password`, na obrazovce se nic nezmeni).
+    ///
+    /// (Na rozdil od `handle_keyboard` tu zamerne CHYBI zpracovani
+    /// `Event::Copy` - kopirovani oznaceneho textu behem prihlasovaciho
+    /// promptu neni podstatny pripad, ve hre je jen "login as: "/
+    /// "Password: ", zadny skutecny vystup ze serveru.)
     fn handle_credentials_keyboard(&mut self, ui: &egui::Ui) {
         let events = ui.input(|i| i.events.clone());
         for event in events {
@@ -587,6 +697,104 @@ impl TerminalSession {
                 self.pending_password.pop();
             }
         }
+    }
+
+    /// Slozi text aktualne oznaceneho useku (`self.selection`) primo z
+    /// mrizky terminalu - `None` kdyz nic neni oznaceno NEBO by vysledny
+    /// text byl prazdny (napr. oznaceni jen prazdnych bunek). Krajni
+    /// mezery na konci kazdeho radku se orizavaji (bezne vycpavkove
+    /// mezery az do sirky mrizky by jinak zbytecne zaneradily zkopirovany
+    /// text) - vnitrni mezery zustavaji zachovane.
+    fn selected_text(&self) -> Option<String> {
+        let selection = self.selection?;
+        let grid = self.term.grid();
+        let (start, end) = selection.normalized();
+        let mut result = String::new();
+        for row in start.0..=end.0 {
+            if row > start.0 {
+                result.push('\n');
+            }
+            let mut line = String::new();
+            for col in 0..grid.columns() {
+                if selection.contains(row, col) {
+                    let point = Point::new(Line(row as i32), Column(col));
+                    let ch = grid[point].c;
+                    line.push(if ch == '\0' { ' ' } else { ch });
+                }
+            }
+            result.push_str(line.trim_end());
+        }
+        if result.trim().is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    /// Prevede pozici mysi (v souradnicich cele obrazovky) na bunku
+    /// mrizky (radek, sloupec), oriznutou na platny rozsah - pouzito pro
+    /// `handle_selection_input`. `rect` je oblast, ve ktere se terminalovy
+    /// text vykresluje (viz `render_grid`), `char_w`/`row_h` rozmery
+    /// jednoho znaku stejneho monospace pisma, jake pouziva
+    /// `resize_to_fit`.
+    fn point_to_cell(pos: egui::Pos2, rect: egui::Rect, char_w: f32, row_h: f32, cols: usize, rows: usize) -> (usize, usize) {
+        let local = pos - rect.min;
+        let col = ((local.x / char_w).floor() as isize).clamp(0, cols as isize - 1) as usize;
+        let row = ((local.y / row_h).floor() as isize).clamp(0, rows as isize - 1) as usize;
+        (row, col)
+    }
+
+    /// Zpracuje tazeni/klik mysi nad textem terminalu (viz `render_grid`)
+    /// a podle toho aktualizuje `self.selection`. Zacatek tazeni zalozi
+    /// nove oznaceni, pokracujici tazeni posouva jeho konec, a obycejny
+    /// klik (bez tazeni) predchozi oznaceni zrusi - presne jak se chova
+    /// kazdy bezny terminal.
+    fn handle_selection_input(
+        &mut self,
+        response: &egui::Response,
+        rect: egui::Rect,
+        char_w: f32,
+        row_h: f32,
+        cols: usize,
+        rows: usize,
+    ) {
+        if response.drag_started() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let cell = Self::point_to_cell(pos, rect, char_w, row_h, cols, rows);
+                self.selection = Some(Selection { anchor: cell, current: cell });
+            }
+        } else if response.dragged() {
+            if let (Some(pos), Some(sel)) = (response.interact_pointer_pos(), self.selection.as_mut()) {
+                sel.current = Self::point_to_cell(pos, rect, char_w, row_h, cols, rows);
+            }
+        } else if response.clicked() {
+            self.selection = None;
+        }
+    }
+
+    /// Vykresli mrizku terminalu (obsah `self.term`) do vlastni presne
+    /// vypocitane oblasti a zpracuje nad ni tazeni/klik mysi pro oznaceni
+    /// textu (`handle_selection_input`) - narozdil od puvodniho
+    /// `ui.add(Label::new(job).selectable(false))` jde o rucni vykresleni
+    /// (`ui.painter().galley`), aby bylo mozne presne mapovat pozici mysi
+    /// na konkretni bunku mrizky (radek/sloupec) a nad textem zaroven
+    /// registrovat vlastni interaktivni oblast (`Sense::click_and_drag`).
+    fn render_grid(&mut self, ui: &mut egui::Ui, font_size: f32) {
+        let font_id = terminal_font(font_size);
+        let (char_w, row_h) = ui.fonts(|f| (f.glyph_width(&font_id, 'M'), f.row_height(&font_id)));
+        let (cols, rows) = { let grid = self.term.grid(); (grid.columns(), grid.screen_lines()) };
+
+        let size = egui::vec2(char_w * cols as f32, row_h * rows as f32);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        }
+        self.handle_selection_input(&response, rect, char_w, row_h, cols, rows);
+
+        let job = self.build_layout_job(font_size);
+        let galley = ui.fonts(|f| f.layout_job(job));
+        ui.painter().galley(rect.min, galley, theme::TEXT);
     }
 
     fn credentials_submit_line(&mut self) {
@@ -696,9 +904,8 @@ impl TerminalSession {
         // plochy tohoto snimku) - viz `resize_to_fit`.
         self.resize_to_fit(ui, font_size);
 
-        let job = self.build_layout_job(font_size);
         egui::ScrollArea::both().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
-            ui.add(egui::Label::new(job).selectable(false));
+            self.render_grid(ui, font_size);
         });
     }
 
@@ -811,6 +1018,13 @@ impl TerminalSession {
                 if point == cursor_point {
                     std::mem::swap(&mut fg, &mut bg);
                 }
+                // Oznaceny text (viz `Selection`/`handle_selection_input`) -
+                // pozadi bunky se prolne s barvou zvyrazneni tematu misto
+                // proste prehozeni fg/bg (jako u kurzoru vyse), aby slo na
+                // prvni pohled rozeznat od kurzoru samotneho.
+                if self.selection.is_some_and(|sel| sel.contains(line, col)) {
+                    bg = blend_toward(bg, theme::ACCENT, 0.45);
+                }
                 let colors = (fg, bg);
                 let ch = if cell.c == '\0' { ' ' } else { cell.c };
 
@@ -891,6 +1105,16 @@ fn text_format(font_id: &egui::FontId, fg: egui::Color32, bg: egui::Color32) -> 
 /// `egui::Color32`, s fallbackem na barvy tematu aplikace.
 fn cell_colors(fg: AnsiColor, bg: AnsiColor) -> (egui::Color32, egui::Color32) {
     (ansi_color(fg, theme::TEXT), ansi_color(bg, theme::BG_DARK))
+}
+
+/// Prolne barvu `from` smerem k `to` o podil `t` (0.0 = beze zmeny, 1.0 =
+/// cela `to`) - pouzito pro zvyrazneni pozadi oznaceneho textu
+/// (`build_layout_job`). Pocita se rucne (misto spolehnuti na alfa
+/// pruhlednost pri vykreslovani), aby vysledek zustal plne krycí bez
+/// ohledu na to, co (pripadne nic) je pod terminalem vykresleno.
+fn blend_toward(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 {
+    let lerp = |a: u8, b: u8| ((a as f32) * (1.0 - t) + (b as f32) * t).round() as u8;
+    egui::Color32::from_rgb(lerp(from.r(), to.r()), lerp(from.g(), to.g()), lerp(from.b(), to.b()))
 }
 
 fn ansi_color(color: AnsiColor, default: egui::Color32) -> egui::Color32 {
@@ -983,6 +1207,15 @@ fn key_to_bytes(key: egui::Key, modifiers: egui::Modifiers) -> Option<Vec<u8>> {
     // terminalu soucasne s prepnutim panelu, coz by vypadalo jako
     // nechtene doplneni v shellu.
     if modifiers.ctrl && !modifiers.alt && key == Key::Tab {
+        return None;
+    }
+
+    // Ctrl+V (Cmd+V na Macu) uz zpracovava `handle_keyboard` samostatne
+    // pres vysokourovnovou `egui::Event::Paste` (skutecny obsah schranky
+    // odeslany jako normalni text) - kdyby se tu NEVYLOUCILO, poslal by
+    // se NAVIC jeste syrovy ridici bajt 0x16 (viz `ctrl_control_code`)
+    // pred/za vlozeny text, coz by vypadalo jako nechteny extra znak.
+    if modifiers.ctrl && !modifiers.alt && key == Key::V {
         return None;
     }
 

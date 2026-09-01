@@ -22,6 +22,7 @@ Vestavěný terminálový emulátor, strom uložených serverů se šifrovaným 
 ## ✨ Funkce
 
 - **Vestavěný SSH terminál** — VT100/ANSI emulace přímo v tabu aplikace, žádné externí okno konzole
+- **Kopírování / vkládání** — označení textu tažením myši, zkopírování přes Ctrl+C, vložení přes Ctrl+V
 - **Rozdělené zobrazení** — dva taby vedle sebe, přepínání fokusu klikem nebo Ctrl+Tab, pro práci na dvou spojeních najednou
 - **Šifrovaný trezor serverů** — AES-256-GCM + Argon2id, hlavní heslo se zadává přímo v okně appky
 - **Strom serverů** — složky (i vnořené), hledání, přejmenování, přesouvání, export/import trezoru
