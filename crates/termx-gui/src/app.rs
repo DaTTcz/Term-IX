@@ -1049,7 +1049,23 @@ impl MainApp {
         }
         self.split_marks.push(kind);
         if self.split_marks.len() == 2 {
-            self.split_focus = 1;
+            self.set_split_focus(1);
+        }
+    }
+
+    /// Nastavi `split_focus` na `i` (0 = levy panel, 1 = pravy) A ZAROVEN
+    /// s tim aktualizuje `active_tab`, aby zvyrazneny (vybrany) tab v
+    /// `tab_bar` vzdy odpovidal panelu, ktery prave prijima klavesnici -
+    /// jinak by (jak upozornila zpetna vazba "nepřepne aktivní TAB
+    /// záložku") zvyrazneny tab v listu a fokusovany panel mohly klidne
+    /// ukazovat na dva RUZNE taby. Pouzivat VZDY misto primeho
+    /// `self.split_focus = ...`.
+    fn set_split_focus(&mut self, i: usize) {
+        self.split_focus = i;
+        if let Some(&kind) = self.split_marks.get(i) {
+            if let Some(idx) = self.tabs.iter().position(|&k| k == kind) {
+                self.active_tab = idx;
+            }
         }
     }
 
@@ -1223,7 +1239,7 @@ impl MainApp {
             // TABu sice rožne barvu ale nezaktivní daný terminál").
             if self.split_marks.len() == 2 {
                 if let Some(pos) = self.split_marks.iter().position(|&k| k == snapshot[idx]) {
-                    self.split_focus = pos;
+                    self.set_split_focus(pos);
                 }
             }
         }
@@ -1319,6 +1335,7 @@ impl MainApp {
         // vysce, presne jako normalni `CentralPanel`.
         let full_rect = ui.available_rect_before_wrap();
         let ctx = ui.ctx().clone();
+        let mut focus_rect: Option<egui::Rect> = None;
 
         ui.columns(2, |columns| {
             for (i, col) in columns.iter_mut().enumerate() {
@@ -1339,17 +1356,36 @@ impl MainApp {
                     inp.pointer.primary_clicked() && inp.pointer.interact_pos().is_some_and(|pos| rect.contains(pos))
                 });
                 if clicked {
-                    self.split_focus = i;
+                    self.set_split_focus(i);
                 }
 
                 let focused = self.split_focus == i;
                 if focused {
-                    col.painter().rect_stroke(rect, egui::Rounding::same(2.0), egui::Stroke::new(2.0_f32, theme::ACCENT));
+                    // Zapamatovat rect fokusovaneho panelu na pozdeji -
+                    // NEKRESLIT ho tady primo pres `col.painter()` (viz
+                    // nize).
+                    focus_rect = Some(rect);
                 }
 
                 self.render_tab_content(col, kind, focused);
             }
         });
+
+        // Fokusovy ramecek fokusovaneho panelu se kresli AZ TEĎ, přes
+        // painter VNEJŠÍHO `ui` (ne uvnitr `ui.columns` přes
+        // `col.painter()`, jak to delala puvodni verze) - kazdy sloupec
+        // z `ui.columns` ma vlastni ORIZNUTY (`clip_rect`) presne na svuj
+        // obdelnik, takze obrys kresleny PRESNE na jeho hranici (`rect`)
+        // se z poloviny ("pulka tloustky care ven") oriznul na 3 stranach
+        // (nahore/dole/vnejsi bok) - viditelna zustala jen cast, ktera se
+        // prekryvala se sousedni oddelovaci carou (zpetna vazba "vypadá
+        // to divně, jen na jedné straně"). Vnejsi `ui` neni tímto
+        // orezanim sloupcu omezeny, takze cely obdelnik (mirne zmensky
+        // dovnitr, aby se nepřekryval s okrajem obrazovky) se vykresli
+        // vcelku, po vsech 4 stranach.
+        if let Some(rect) = focus_rect {
+            ui.painter().rect_stroke(rect.shrink(1.5), egui::Rounding::same(2.0), egui::Stroke::new(2.0_f32, theme::ACCENT));
+        }
 
         // Tenka oddelovaci cara mezi oběma panely - `ui.columns` sama o
         // sobe zadnou nekresli, jen mezi sloupci necha mezeru
@@ -3072,15 +3108,24 @@ impl MainApp {
         // `input_mut(|i| i.consume_key(...))` - NE jen `input(|i| i.key_pressed(...))`
         // (puvodni chyba, zpetna vazba "ctrl+tab běhá po všem v aplikaci
         // (menu, uložené servery, atd)") - to jen CETLO, ale neODEBRALO
-        // udalost z fronty, takze ji pak zpracovala i vestavena
-        // Tab-navigace egui mezi fokusovatelnymi widgety (menu, strom
-        // ulozenych serveru...) soucasne s nasim prepnutim panelu.
-        // `consume_key` udalost zaroven zkontroluje i odebere, cimz se
-        // dal uz nedostane.
+        // udalost z fronty. `consume_key` ji zaroven zkontroluje i
+        // odebere, ale vestavena Tab-navigace egui mezi fokusovatelnymi
+        // widgety (menu, strom ulozenych serveru...) se aktivuje jen
+        // KDYZ uz nejaky takovy widget aktualne MA fokus (napr. zbyly
+        // fokus po drivejsim kliknuti do vyhledavaciho pole ve strome) -
+        // proto po zachyceni Ctrl+Tab jeste navic preventivne zrusime
+        // fokus JAKEHOKOLIV takoveho widgetu (`surrender_focus`), aby
+        // nebylo co "posunout dal" (zpetna vazba "dál běhá po aplikaci
+        // jako podtržítko a nepřepne aktivní TAB záložku" - dale opraveno
+        // jeste tim, ze `set_split_focus` vzdy zaroven synchronizuje i
+        // zvyrazneny tab v `tab_bar`, viz tam).
         if self.split_marks.len() == 2 {
             let ctrl_tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Tab));
             if ctrl_tab {
-                self.split_focus = 1 - self.split_focus;
+                self.set_split_focus(1 - self.split_focus);
+                if let Some(id) = ctx.memory(|m| m.focused()) {
+                    ctx.memory_mut(|m| m.surrender_focus(id));
+                }
             }
         }
 
