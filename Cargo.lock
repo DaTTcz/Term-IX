@@ -4360,7 +4360,7 @@ dependencies = [
 
 [[package]]
 name = "term-ix"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4376,7 +4376,7 @@ dependencies = [
 
 [[package]]
 name = "termx-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4389,7 +4389,7 @@ dependencies = [
 
 [[package]]
 name = "termx-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -4409,7 +4409,7 @@ dependencies = [
 
 [[package]]
 name = "termx-splash"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "fontdue",
@@ -4420,7 +4420,7 @@ dependencies = [
 
 [[package]]
 name = "termx-ssh"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4434,7 +4434,7 @@ dependencies = [
 
 [[package]]
 name = "termx-update"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "self_update",
@@ -4442,7 +4442,7 @@ dependencies = [
 
 [[package]]
 name = "termx-vault"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
