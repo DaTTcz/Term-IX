@@ -29,6 +29,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Systemove -dev knihovny potrebne k SLINKOVANI eframe/egui (glow +
+      # winit, X11 backend) na ubuntu-latest bezerou - na rozdil od
+      # Windows tu nejsou vestavene v runneru. Presne tato sada je
+      # osvedcena/pouzivana primo oficialnim CI projektu egui/eframe
+      # (emilk/egui) - `libssl-dev`/`libgtk-3-dev` navic pro jistotu, i
+      # kdyz nas `rfd` (0.15, vychozi "xdg-portal" backend) je uz sam o
+      # sobe na GTK3 nezavisly.
+      - name: Nainstalovat systemove zavislosti (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev libgtk-3-dev
+
       - name: Nainstalovat Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
