@@ -13,9 +13,9 @@
 
 # Term-IX
 
-Desktopový terminálový klient pro správu vzdálených SSH spojení, inspirovaný **MobaXtermem** — napsaný v Rustu, pro Windows i Linux.
+Desktopový terminálový klient pro správu vzdálených SSH spojení - napsaný v Rustu, pro Windows i Linux.
 
-Vestavěný terminálový emulátor přímo v tabu (žádné externí konzolové okno), strom uložených serverů se šifrovaným trezorem, MobaXterm-podobný info proužek se stavem serveru a rozdělené zobrazení dvou spojení vedle sebe.
+Vestavěný terminálový emulátor, strom uložených serverů se šifrovaným trezorem, info proužek se stavem serveru a rozdělené zobrazení dvou spojení vedle sebe.
 
 ---
 
@@ -67,24 +67,7 @@ Appka si sama hlídá nové verze na GitHubu a při startu nabídne stažení a 
 
 ## 🏗️ Architektura
 
-Aplikace je rozdělená do samostatných cargo crates (workspace), aby šlo přidávat protokoly bez zásahu do zbytku appky:
-
-```
-Term-IX/
-├── src/main.rs          – binárka: propojí vše dohromady, CLI, self-update
-└── crates/
-    ├── termx-core/       – sdílené typy: Session, AuthMethod, trait
-    │                       ProtocolModule, ModuleRegistry, cross-platform
-    │                       cesty (AppPaths)
-    ├── termx-vault/      – šifrované uložení serverů (AES-256-GCM + Argon2id)
-    ├── termx-update/     – self-update z GitHub Releases
-    ├── termx-ssh/        – SSH modul + vestavěná interaktivní relace
-    ├── termx-gui/        – hlavní grafické rozhraní (egui/eframe) – horní
-    │                       menu, strom serverů vlevo, taby vpravo, vestavěný
-    │                       terminál (alacritty_terminal)
-    └── termx-splash/     – úvodní splash okno s logem (mimo terminál)
-```
-
+Aplikace je rozdělená do samostatných cargo crates (workspace), aby šlo přidávat protokoly bez zásahu do zbytku appky.
 Přidání nového protokolu (např. sériová linka / FTP): nový crate implementující `termx_core::ProtocolModule`, zaregistrovat v `src/main.rs`, rozšířit `termx_core::Protocol` — zbytek appky (GUI, vault, update) se tím nemusí měnit.
 
 ## 🛠️ Technologie
@@ -96,19 +79,9 @@ Přidání nového protokolu (např. sériová linka / FTP): nový crate impleme
 - **Šifrování trezoru:** AES-256-GCM + Argon2id
 - **Splash okno:** minifb + fontdue
 
-## 🗺️ Roadmap
-
-- [ ] Ověření otisku klíče serveru (`known_hosts`) v `termx-ssh`
-- [ ] Přihlášení SSH privátním klíčem / přes ssh-agent
-- [ ] Modul `termx-serial` (sériová linka, obdoba PuTTY/RealTerm)
-- [ ] Modul `termx-ftp` / `termx-sftp`
-- [ ] Řazení serverů ve stromu (tažením), přesun mezi složkami tažením
-- [ ] Přenos souborů přetažením / příkazem v rámci SSH/SFTP relace
-- [ ] Kompletní `known_hosts` + varování při změně klíče serveru
-
 ## ⚠️ Prohlášení
 
-Term-IX je stále rané, aktivně vyvíjené softwarové dílo. Používáš na vlastní riziko — appka se přímo přihlašuje na tvoje servery a posílá jim příkazy. Doporučujeme vyzkoušet nejdřív na méně důležitém spojení.
+Term-IX je stále rané, aktivně vyvíjené softwarové dílo. Používáš na vlastní riziko — appka se přímo přihlašuje na tvoje servery a posílá jim příkazy. Doporučujeme vyzkoušet.
 
 ## 📄 Licence
 
@@ -117,4 +90,3 @@ Term-IX je stále rané, aktivně vyvíjené softwarové dílo. Používáš na 
 ## 🙏 Poděkování
 
 - [egui](https://github.com/emilk/egui) a [alacritty](https://github.com/alacritty/alacritty) za skvělé open-source knihovny, na kterých Term-IX staví
-- [MobaXterm](https://mobaxterm.mobatek.net/) za inspiraci designem a funkcemi
