@@ -75,9 +75,8 @@ Přidání nového protokolu (např. sériová linka / FTP): nový crate impleme
 - **Jazyk:** Rust
 - **GUI:** [egui](https://github.com/emilk/egui) / eframe
 - **Terminálový emulátor:** [alacritty_terminal](https://github.com/alacritty/alacritty) (VT100/ANSI parser)
-- **SSH:** [russh](https://github.com/Eugeny/russh)
 - **Šifrování trezoru:** AES-256-GCM + Argon2id
-- **Splash okno:** minifb + fontdue
+- **SSH:** [russh](https://github.com/Eugeny/russh)
 
 ## ⚠️ Prohlášení
 
