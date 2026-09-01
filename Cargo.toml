@@ -14,7 +14,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["DaTTcz"]
 repository = "https://github.com/DaTTcz/Term-IX"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [workspace.dependencies]
 termx-core = { path = "crates/termx-core" }
