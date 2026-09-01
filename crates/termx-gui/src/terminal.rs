@@ -717,7 +717,7 @@ impl TerminalSession {
         // pozadavek "najetím myši nad info proužek bychom mohli v
         // bublině říct co dané znamená".
         let mut items: Vec<(String, &'static str)> =
-            vec![(format!("🔌 {}", format_host_label(&self.session)), tr.status_host_tooltip)];
+            vec![(format!("🔌 {}", format_host_display(&self.session, stats)), tr.status_host_tooltip)];
 
         if let Some(cpu) = stats.cpu_percent {
             items.push((format!("⚙ {}%", fmt_decimal(cpu as f64, 0)), tr.status_cpu_tooltip));
@@ -847,6 +847,24 @@ fn format_host_label(session: &Session) -> String {
         session.host.clone()
     } else {
         format!("{}:{}", session.host, session.port)
+    }
+}
+
+/// Text pro polozku "🔌" v info prouzku - na rozdil od holeho
+/// `format_host_label` (adresa/port, jak je uzivatel ZADAL pri vytvareni
+/// spojeni) pripoji i skutecny nazev vzdaleneho stroje (`SystemStats::hostname`,
+/// vystup prikazu `hostname` na druhe strane), pokud uz dorazil a lisi se
+/// od zadane adresy - zpetna vazba "v info panelu ukazujeme jen IP adresu
+/// ačkoliv vidíme skutečný název serveru hned v prvním řádku terminálu".
+/// Kdyz se hostname jeste nestihl zjistit (`None`, prvnich par sekund po
+/// pripojeni - viz `SystemStats`), nebo je stejny jako zadana adresa
+/// (uzivatel uz zadal rovnou hostname), zobrazi se jen puvodni adresa
+/// beze zmeny.
+fn format_host_display(session: &Session, stats: &SystemStats) -> String {
+    let label = format_host_label(session);
+    match &stats.hostname {
+        Some(hostname) if !hostname.eq_ignore_ascii_case(&session.host) => format!("{hostname} ({label})"),
+        _ => label,
     }
 }
 

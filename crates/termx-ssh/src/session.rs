@@ -92,6 +92,16 @@ pub enum SshEvent {
 /// nezobrazi, misto aby to shodilo celou aktualizaci statistik.
 #[derive(Debug, Clone, Default)]
 pub struct SystemStats {
+    /// Skutecny hostname vzdaleneho systemu (vystup prikazu `hostname`) -
+    /// na rozdil od [`termx_core::Session::host`] (adresa/hostname, kterou
+    /// uzivatel ZADAL pri vytvareni spojeni - klidne i "holá" IP adresa)
+    /// jde o to, jak se stroj nazyva SAM SEBE. Zpetna vazba "v info
+    /// panelu ukazujeme jen IP adresu ačkoliv vidíme skutečný název
+    /// serveru hned v prvním řádku terminálu" - viz pouziti v
+    /// `termx-gui::terminal::format_host_label`. `None`, kdyz prikaz
+    /// selze nebo vrati prazdny vystup (stejne jako ostatni `Option`
+    /// pole zde).
+    pub hostname: Option<String>,
     /// Vytizeni CPU v procentech, odvozene z 1-minutoveho load average
     /// (`/proc/loadavg`) deleneho poctem jader - jde tedy o hrube
     /// priblizeni (ne totozne s tim, co by ukazal `top`), ale bez
@@ -176,6 +186,7 @@ pub fn spawn_ssh_session(session: Session, initial_cols: u16, initial_rows: u16)
 /// znackou, aby ho `parse_stats` slo spolehlive rozpoznat bez ohledu na
 /// lokalizaci/format ostatnich nastroju.
 const STATS_COMMAND: &str = r#"
+echo TERMIX_HOSTNAME $(hostname 2>/dev/null)
 echo TERMIX_LOADAVG $(cat /proc/loadavg 2>/dev/null)
 echo TERMIX_NPROC $(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null)
 echo TERMIX_MEMTOTAL $(grep -m1 MemTotal /proc/meminfo 2>/dev/null)
@@ -294,7 +305,12 @@ fn parse_stats(
             continue;
         }
 
-        if let Some(rest) = line.strip_prefix("TERMIX_LOADAVG ") {
+        if let Some(rest) = line.strip_prefix("TERMIX_HOSTNAME ") {
+            let hostname = rest.trim();
+            if !hostname.is_empty() {
+                stats.hostname = Some(hostname.to_string());
+            }
+        } else if let Some(rest) = line.strip_prefix("TERMIX_LOADAVG ") {
             loadavg1 = rest.split_whitespace().next().and_then(|v| v.parse::<f32>().ok());
         } else if let Some(rest) = line.strip_prefix("TERMIX_NPROC ") {
             if let Ok(n) = rest.trim().parse::<f32>() {
