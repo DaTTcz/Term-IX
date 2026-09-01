@@ -55,6 +55,8 @@ Při prvním spuštění appka vyzve k nastavení hlavního hesla trezoru (nebo 
 
 Přepínače: `--no-splash` přeskočí úvodní okno s logem, `--no-update` přeskočí kontrolu aktualizací.
 
+> **Windows:** appka zatím není podepsaná certifikátem, takže Windows SmartScreen může při prvním spuštění ukázat upozornění na neznámého tvůrce. Stačí kliknout na „Další informace“ → „Přesto spustit“.
+
 ## 🔄 Aktualizace
 
 Appka si sama hlídá nové verze na GitHubu a při startu nabídne stažení a výměnu běžící binárky. Release proces (`.github/workflows/release.yml`) po vytvoření tagu `vX.Y.Z` automaticky zabuildí a nahraje binárky pro Windows i Linux.
