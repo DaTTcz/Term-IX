@@ -4360,7 +4360,7 @@ dependencies = [
 
 [[package]]
 name = "term-ix"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4368,7 +4368,6 @@ dependencies = [
  "termx-gui",
  "termx-splash",
  "termx-ssh",
- "termx-update",
  "tracing",
  "tracing-subscriber",
  "winres",
