@@ -1213,6 +1213,19 @@ impl MainApp {
 
         if let Some(idx) = to_select {
             self.active_tab = idx;
+            // Kdyz je zrovna aktivni rozdelene zobrazeni (`split_marks.len()
+            // == 2`), samotne `active_tab` nema na to, co je videt, zadny
+            // vliv (viz `active_tab_content`) - klik na nazev jednoho z OB
+            // OZNACENYCH tabu tedy misto (nebo navic) preplnuti aktivniho
+            // tabu preplne, ktery panel rozdeleneho zobrazeni ma fokus, aby
+            // se zvyrazneny (vybrany) tab v listě shodoval s tim, kam
+            // opravdu miri klavesnice (zpetna vazba "kliknutí na záložku
+            // TABu sice rožne barvu ale nezaktivní daný terminál").
+            if self.split_marks.len() == 2 {
+                if let Some(pos) = self.split_marks.iter().position(|&k| k == snapshot[idx]) {
+                    self.split_focus = pos;
+                }
+            }
         }
         if let Some(confirm) = to_confirm_close {
             self.close_tab_confirm = Some(confirm);
@@ -1274,11 +1287,10 @@ impl MainApp {
     /// pozadavek "dva TABy vedle sebe... pracovat na dvou TABech
     /// najednou"). Klavesovy vstup dostava jen panel podle `split_focus`
     /// (0 = levy, 1 = pravy) - prepina se kliknutim kamkoliv do panelu
-    /// (`ui.interact` nize, jen jako neviditelna klikaci zona na pozadi,
-    /// aby nekolidovala s vlastnimi widgety terminalu uvnitr) nebo
-    /// globalne Ctrl+Tab (viz handler v `MainApp::update`). Fokusovany
-    /// panel ma zvyraznely (`theme::ACCENT`) okraj, aby bylo hned videt,
-    /// kam prave miri klavesnice.
+    /// (kontrola pozice ukazatele proti obdelniku sloupce, viz komentar
+    /// uvnitr) nebo globalne Ctrl+Tab (viz handler v `MainApp::update`).
+    /// Fokusovany panel ma zvyraznely (`theme::ACCENT`) okraj, aby bylo
+    /// hned videt, kam prave miri klavesnice.
     fn render_split_view(&mut self, ui: &mut egui::Ui) {
         let marks = self.split_marks.clone();
         let (Some(&left), Some(&right)) = (marks.first(), marks.get(1)) else {
@@ -1295,41 +1307,61 @@ impl MainApp {
         };
         let panes = [left, right];
 
-        ui.horizontal(|ui| {
-            let total_width = ui.available_width();
-            let spacing = ui.spacing().item_spacing.x;
-            let pane_width = ((total_width - spacing) / 2.0).max(1.0);
-            let pane_height = ui.available_height();
+        // `ui.columns` (vestaveny egui mechanismus), NE puvodni rucni
+        // `ui.horizontal` + `ui.allocate_ui_with_layout` - ta puvodni
+        // verze davala kazdemu panelu jen "umele" vnorenou `Ui`, ktera
+        // spravne nespolupracovala s `TerminalSession::render_status_bar`
+        // (`egui::TopBottomPanel::show_inside`, ktery cekal normalni
+        // "primou" `Ui`) - vysledkem byl chybejici info prouzek a
+        // oriznuty obsah terminalu (zpetna vazba "chybí info proužek
+        // okna terminálů jsou jsou ořezaná"). `ui.columns` dava kazdemu
+        // sloupci radnou vlastni `Ui` se spravnym `max_rect` po cele
+        // vysce, presne jako normalni `CentralPanel`.
+        let full_rect = ui.available_rect_before_wrap();
+        let ctx = ui.ctx().clone();
 
-            for (i, &kind) in panes.iter().enumerate() {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(pane_width, pane_height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        let rect = ui.available_rect_before_wrap();
-                        // Neviditelna klikaci zona na CELE pozadi panelu -
-                        // klik kamkoliv do panelu (mimo skutecne widgety
-                        // terminalu, ktere maji vlastni `Sense` a klik si
-                        // "schvatnou" driv) ho oznaci jako fokusovany.
-                        let bg_response = ui.interact(rect, ui.id().with(("split_pane_bg", i)), egui::Sense::click());
-                        if bg_response.clicked() {
-                            self.split_focus = i;
-                        }
+        ui.columns(2, |columns| {
+            for (i, col) in columns.iter_mut().enumerate() {
+                let kind = panes[i];
+                let rect = col.max_rect();
 
-                        let focused = self.split_focus == i;
-                        if focused {
-                            ui.painter().rect_stroke(rect, egui::Rounding::same(2.0), egui::Stroke::new(2.0_f32, theme::ACCENT));
-                        }
-
-                        self.render_tab_content(ui, kind, focused);
-                    },
-                );
-
-                if i == 0 {
-                    ui.separator();
+                // Klik KAMKOLIV do tohoto sloupce - vc. primo do textu
+                // terminalu uvnitr - ho oznaci jako fokusovany. Zamerne
+                // NE `Ui::interact` na neviditelnem pozadi PRED obsahem
+                // (puvodni verze) - to v prekryvajicich se widgetech
+                // "schvatly" vnitrni widgety terminalu (radeji nad nimi
+                // vyhrala jejich vlastni citlivost), takze klik do
+                // panelu nikdy fokus nezmenil (zpetna vazba "nejde
+                // přepnout myší"). Misto toho se proste kontroluje
+                // POZICE ukazatele pri kliknuti proti obdelniku sloupce,
+                // bez ohledu na to, jaky widget je zrovna "navrchu".
+                let clicked = ctx.input(|inp| {
+                    inp.pointer.primary_clicked() && inp.pointer.interact_pos().is_some_and(|pos| rect.contains(pos))
+                });
+                if clicked {
+                    self.split_focus = i;
                 }
+
+                let focused = self.split_focus == i;
+                if focused {
+                    col.painter().rect_stroke(rect, egui::Rounding::same(2.0), egui::Stroke::new(2.0_f32, theme::ACCENT));
+                }
+
+                self.render_tab_content(col, kind, focused);
             }
         });
+
+        // Tenka oddelovaci cara mezi oběma panely - `ui.columns` sama o
+        // sobe zadnou nekresli, jen mezi sloupci necha mezeru
+        // (`item_spacing.x`). `line_segment` misto `vline` - jistota
+        // stability API napric verzemi egui (`vline`/`Rangef` jsou
+        // novejsi doplnek, `line_segment` je zakladni a osvedcena
+        // metoda).
+        let x = full_rect.center().x;
+        ui.painter().line_segment(
+            [egui::pos2(x, full_rect.top()), egui::pos2(x, full_rect.bottom())],
+            ui.visuals().widgets.noninteractive.bg_stroke,
+        );
     }
 
     /// Nacte logo aplikace jako GPU texturu (jen jednou, pak uz se
@@ -3036,8 +3068,17 @@ impl MainApp {
         // - ta zpracovava jen bajty pro AKTUALNE fokusovany SSH terminal a
         // Ctrl+Tab se z ni zamerne vyjima (viz `terminal::key_to_bytes`),
         // aby nezpusobila i odeslani Tabu do shellu.
+        //
+        // `input_mut(|i| i.consume_key(...))` - NE jen `input(|i| i.key_pressed(...))`
+        // (puvodni chyba, zpetna vazba "ctrl+tab běhá po všem v aplikaci
+        // (menu, uložené servery, atd)") - to jen CETLO, ale neODEBRALO
+        // udalost z fronty, takze ji pak zpracovala i vestavena
+        // Tab-navigace egui mezi fokusovatelnymi widgety (menu, strom
+        // ulozenych serveru...) soucasne s nasim prepnutim panelu.
+        // `consume_key` udalost zaroven zkontroluje i odebere, cimz se
+        // dal uz nedostane.
         if self.split_marks.len() == 2 {
-            let ctrl_tab = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Tab));
+            let ctrl_tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Tab));
             if ctrl_tab {
                 self.split_focus = 1 - self.split_focus;
             }
