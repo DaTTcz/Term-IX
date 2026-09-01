@@ -588,7 +588,24 @@ impl TerminalSession {
     /// backend generuje pro platformni zkratku kopirovani - Ctrl+C i
     /// Cmd+C - NAVIC vedle syrove `Event::Key`), ne rucnim resenim
     /// modifikatoru u `Key::C`.
+    ///
+    /// Kdyz ma prave fokus nejaky JINY widget (napr. textove pole v
+    /// otevrenem dialogu "Nový server"/Nastaveni, nebo vyhledavani ve
+    /// stromu serveru), klavesnice terminalu vubec nepatri - jinak by se
+    /// psani do takoveho pole soucasne posilalo i na SSH kanal (zpetna
+    /// vazba: "když píšu v popup okně tak zároven píšu i v terminálu").
+    /// Terminal sam zadny skutecny fokusovatelny widget (`TextEdit`
+    /// apod.) nema - vzdy jen rucne vykresluje (`render_grid`) - takze
+    /// `ctx.memory(|m| m.focused())` vraci `Some` prave a jen tehdy, kdyz
+    /// fokus drzi nejaky takovy JINY widget; jakmile ho ztrati (dialog se
+    /// zavre, pole ztrati fokus), egui to samo rozpozna na dalsim
+    /// snimku (widget uz neni vykreslen/nehlasi zajem o fokus) a
+    /// klavesnice se terminalu vrati bez dalsiho zasahu.
     fn handle_keyboard(&mut self, ui: &egui::Ui) {
+        if ui.ctx().memory(|m| m.focused()).is_some() {
+            return;
+        }
+
         let events = ui.input(|i| i.events.clone());
 
         // Zjisti se PRED hlavnim pruchodem, aby vetev `Event::Key` nize
@@ -643,7 +660,14 @@ impl TerminalSession {
     /// `Event::Copy` - kopirovani oznaceneho textu behem prihlasovaciho
     /// promptu neni podstatny pripad, ve hre je jen "login as: "/
     /// "Password: ", zadny skutecny vystup ze serveru.)
+    ///
+    /// Stejna pojistka proti "utoku" klavesnice do soucasne otevreneho
+    /// dialogu jako u `handle_keyboard` - viz tamni komentar.
     fn handle_credentials_keyboard(&mut self, ui: &egui::Ui) {
+        if ui.ctx().memory(|m| m.focused()).is_some() {
+            return;
+        }
+
         let events = ui.input(|i| i.events.clone());
         for event in events {
             match event {
