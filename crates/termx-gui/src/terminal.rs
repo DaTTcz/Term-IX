@@ -756,15 +756,30 @@ impl TerminalSession {
     }
 
     /// Prevede pozici mysi (v souradnicich cele obrazovky) na bunku
-    /// mrizky (radek, sloupec), oriznutou na platny rozsah - pouzito pro
-    /// `handle_selection_input`. `rect` je oblast, ve ktere se terminalovy
-    /// text vykresluje (viz `render_grid`), `char_w`/`row_h` rozmery
-    /// jednoho znaku stejneho monospace pisma, jake pouziva
-    /// `resize_to_fit`.
-    fn point_to_cell(pos: egui::Pos2, rect: egui::Rect, char_w: f32, row_h: f32, cols: usize, rows: usize) -> (usize, usize) {
+    /// mrizky (radek, sloupec) - pouzito pro `handle_selection_input`.
+    /// `rect` je oblast, ve ktere se terminalovy text vykresluje (viz
+    /// `render_grid`).
+    ///
+    /// POZOR: zamerne se to pocita ze SKUTECNE polohy znaku ve
+    /// vykreslenem `galley` (`Galley::cursor_from_pos`), NE odhadem
+    /// "sirka znaku (`char_w` z `glyph_width('M')`) krat poradove cislo
+    /// sloupce" - ten byl u pouziteho pisma/DPI mirne nepresny (skutecny
+    /// rozestup znaku se od `glyph_width('M')` drobet lisil) a chyba se s
+    /// kazdym dalsim sloupcem SCITALA, takze cim dal doprava se kliklo,
+    /// tim vetsi byl vysledny posun oznaceni oproti mistu kliknuti -
+    /// presne podle zpetne vazby "kliknu těsně za 2 a táhnu myš pro
+    /// označení ale označí se mi až x znaků od kliknutí". `cursor_from_pos`
+    /// se pta primo `galley`, kde skutecne (pixel presne) ktery znak lezi,
+    /// takze zadna takova kumulujici se chyba vzniknout nemuze. Kazdy
+    /// radek v `galley` ma vzdy presne `cols` znaku (viz `build_layout_job` -
+    /// prazdne bunky se vyplnuji mezerou), takze vraceny sloupec by mel
+    /// vzdy uz sam o sobe byt v platnem rozsahu - `min` nize je jen
+    /// pojistka.
+    fn point_to_cell(pos: egui::Pos2, rect: egui::Rect, galley: &egui::Galley, cols: usize, rows: usize) -> (usize, usize) {
         let local = pos - rect.min;
-        let col = ((local.x / char_w).floor() as isize).clamp(0, cols as isize - 1) as usize;
-        let row = ((local.y / row_h).floor() as isize).clamp(0, rows as isize - 1) as usize;
+        let cursor = galley.cursor_from_pos(local);
+        let row = cursor.rcursor.row.min(rows.saturating_sub(1));
+        let col = cursor.rcursor.column.min(cols.saturating_sub(1));
         (row, col)
     }
 
@@ -773,23 +788,15 @@ impl TerminalSession {
     /// nove oznaceni, pokracujici tazeni posouva jeho konec, a obycejny
     /// klik (bez tazeni) predchozi oznaceni zrusi - presne jak se chova
     /// kazdy bezny terminal.
-    fn handle_selection_input(
-        &mut self,
-        response: &egui::Response,
-        rect: egui::Rect,
-        char_w: f32,
-        row_h: f32,
-        cols: usize,
-        rows: usize,
-    ) {
+    fn handle_selection_input(&mut self, response: &egui::Response, rect: egui::Rect, galley: &egui::Galley, cols: usize, rows: usize) {
         if response.drag_started() {
             if let Some(pos) = response.interact_pointer_pos() {
-                let cell = Self::point_to_cell(pos, rect, char_w, row_h, cols, rows);
+                let cell = Self::point_to_cell(pos, rect, galley, cols, rows);
                 self.selection = Some(Selection { anchor: cell, current: cell });
             }
         } else if response.dragged() {
             if let (Some(pos), Some(sel)) = (response.interact_pointer_pos(), self.selection.as_mut()) {
-                sel.current = Self::point_to_cell(pos, rect, char_w, row_h, cols, rows);
+                sel.current = Self::point_to_cell(pos, rect, galley, cols, rows);
             }
         } else if response.clicked() {
             self.selection = None;
@@ -808,16 +815,32 @@ impl TerminalSession {
         let (char_w, row_h) = ui.fonts(|f| (f.glyph_width(&font_id, 'M'), f.row_height(&font_id)));
         let (cols, rows) = { let grid = self.term.grid(); (grid.columns(), grid.screen_lines()) };
 
+        // `char_w`/`row_h` (odhad ze sirky znaku 'M') se pouzivaji JEN pro
+        // celkovou velikost oblasti (tady) - presne mapovani pozice mysi
+        // na konkretni znak uz nize resi `handle_selection_input` primo
+        // pres skutecnou geometrii `galley` (viz `point_to_cell`), takze
+        // pripadna drobna nepresnost tohoto odhadu uz oznaceni textu
+        // neovlivni.
         let size = egui::vec2(char_w * cols as f32, row_h * rows as f32);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
 
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         }
-        self.handle_selection_input(&response, rect, char_w, row_h, cols, rows);
 
+        // Galley se sestavi PRED zpracovanim tazeni mysi (viz nize), aby
+        // `handle_selection_input` mohlo pro tento snimek pouzit jeho
+        // skutecnou geometrii - barvy zvyrazneni oznaceni v nem sice jeste
+        // odpovidaji stavu `self.selection` PRED timto snimkem (o jeden
+        // snimek pozadu, cca 33 ms - viz `request_repaint_after` v
+        // `render`), ale to je pro polohu/rozmery jednotlivych znaku
+        // bezvyznamne (barva na rozlozeni znaku nema vliv), takze presnost
+        // mapovani mysi na znak tim nijak netrpi.
         let job = self.build_layout_job(font_size);
         let galley = ui.fonts(|f| f.layout_job(job));
+
+        self.handle_selection_input(&response, rect, &galley, cols, rows);
+
         ui.painter().galley(rect.min, galley, theme::TEXT);
     }
 
