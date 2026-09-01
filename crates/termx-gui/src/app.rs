@@ -148,6 +148,41 @@ enum UpdateCheck {
     /// Kontrolu se nepodarilo provest (napr. bez pripojeni k internetu) -
     /// nikdy nesmi byt fatalni, jen se to takto tise zobrazi v Home tabu.
     Failed(String),
+    /// Automaticka kontrola pri startu je vypnuta (`--no-update`, viz
+    /// `main.rs`) - `maybe_start_update_check` v tomto stavu zustava
+    /// natrvalo (nikdy nesplni podminku `NotStarted`). Rucni tlacitko
+    /// "Zkontrolovat aktualizace" v dialogu "O programu" i tak funguje -
+    /// vola `start_update_check` primo, bez ohledu na tento stav.
+    Disabled,
+}
+
+/// Stav SKUTECNEHO stahovani/instalace nove verze - na rozdil od pouhe
+/// KONTROLY dostupnosti ([`UpdateCheck`] vyse) zacina az kliknutim na
+/// tlacitko "Aktualizovat" v Home tabu (`render_update_check_status`).
+/// Predtim se stahovani/instalace delalo VZDY automaticky a potichu pri
+/// kazdem startu aplikace (`main.rs::check_for_updates`, jeste pred
+/// otevrenim hlavniho okna) - podle zpetne vazby "spustil jsem program,
+/// startokno a konec nic mi to neřeklo a updatlo to samo" bez jakekoliv
+/// viditelne zpetne vazby, a hlavne bez moznosti novou verzi rovnou
+/// spustit (aplikace se jen tise zavrela, uzivatel ji musel pustit
+/// znovu rucne). Cely tenhle mechanismus proto presunut sem, do Home
+/// tabu, jako viditelny/ovladany krok.
+enum UpdateInstall {
+    /// Instalace jeste nezacala.
+    NotStarted,
+    /// Stahovani/instalace prave bezi na pozadi (`start_update_install`) -
+    /// `termx_update::self_update` je blokujici (sitovy pozadavek +
+    /// zapis na disk), proto na samostatnem vlakne, stejne jako
+    /// `start_update_check`.
+    Installing,
+    /// Uspesne dokonceno - `String` je nove nainstalovana verze. Home
+    /// tab misto pruběhu ted nabidne tlacitko "Spustit novou verzi"
+    /// (`restart_into_new_version`).
+    Done(String),
+    /// Stahovani/instalace se nezdarilo (napr. vypadek pripojeni behem
+    /// stahovani) - zobrazi se chybova hlaska a tlacitko pro dalsi
+    /// pokus (`start_update_install` znovu).
+    Failed(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -790,6 +825,13 @@ struct MainApp {
     /// (viz `maybe_start_update_check`) - `None`, kdyz zadna kontrola
     /// zrovna nebezi (jeste nezacala, nebo uz vysledek dorazil).
     update_rx: Option<std::sync::mpsc::Receiver<Result<Option<LatestRelease>, String>>>,
+    /// Stav SKUTECNE instalace nove verze pro Home tab, viz
+    /// [`UpdateInstall`].
+    update_install: UpdateInstall,
+    /// Prijimac vysledku instalace ze samostatneho vlakna (viz
+    /// `start_update_install`) - obdoba `update_rx`, jen pro instalaci
+    /// misto pouhe kontroly.
+    install_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
 
     status_message: Option<String>,
     /// Dialog "O programu" (`show_about_dialog`) - na rozdil od
@@ -813,7 +855,14 @@ struct MainApp {
 }
 
 impl MainApp {
-    fn new(vault: Vault, vault_path: PathBuf, master_password: String, registry: ModuleRegistry, settings: AppSettings) -> Self {
+    fn new(
+        vault: Vault,
+        vault_path: PathBuf,
+        master_password: String,
+        registry: ModuleRegistry,
+        settings: AppSettings,
+        skip_update_check: bool,
+    ) -> Self {
         Self {
             vault,
             vault_path,
@@ -839,8 +888,10 @@ impl MainApp {
             guest_login: GuestLoginForm::default(),
             settings,
             logo_texture: None,
-            update_check: UpdateCheck::NotStarted,
+            update_check: if skip_update_check { UpdateCheck::Disabled } else { UpdateCheck::NotStarted },
             update_rx: None,
+            update_install: UpdateInstall::NotStarted,
+            install_rx: None,
             status_message: None,
             about_dialog_open: false,
             split_marks: Vec::new(),
@@ -856,7 +907,7 @@ impl MainApp {
     /// existujicimu/vytvorit novy trezor primo v levem panelu (viz
     /// `render_guest_login`) - `vault_path` je proto potreba znat i tady,
     /// i kdyz `self.vault` je do te doby jen `Vault::in_memory`.
-    fn new_guest(vault_path: PathBuf, registry: ModuleRegistry, settings: AppSettings) -> Self {
+    fn new_guest(vault_path: PathBuf, registry: ModuleRegistry, settings: AppSettings, skip_update_check: bool) -> Self {
         Self {
             vault: Vault::in_memory(),
             vault_path,
@@ -887,8 +938,10 @@ impl MainApp {
             guest_login: GuestLoginForm::default(),
             settings,
             logo_texture: None,
-            update_check: UpdateCheck::NotStarted,
+            update_check: if skip_update_check { UpdateCheck::Disabled } else { UpdateCheck::NotStarted },
             update_rx: None,
+            update_install: UpdateInstall::NotStarted,
+            install_rx: None,
             status_message: None,
             about_dialog_open: false,
             split_marks: Vec::new(),
@@ -1444,27 +1497,76 @@ impl MainApp {
         self.update_rx = Some(rx);
     }
 
-    /// Vykresli aktualni stav kontroly aktualizace (`self.update_check`) -
-    /// sdilene mezi Home tabem (`render_home`) a dialogem "O programu"
+    /// Vykresli aktualni stav kontroly/instalace aktualizace - sdileno
+    /// mezi Home tabem (`render_home`) a dialogem "O programu"
     /// (`show_about_dialog`), aby obe mista zobrazovala stejnou
     /// informaci stejnym zpusobem misto dvou kopii stejneho `match`u.
+    ///
+    /// `self.update_install` (viz [`UpdateInstall`]) ma prednost pred
+    /// `self.update_check` - jakmile uzivatel jednou klikne na
+    /// "Aktualizovat", dalsi snimky uz misto puvodni "Nova verze je
+    /// dostupna" hlasky ukazuji prubeh stahovani/instalace az po
+    /// tlacitko "Spustit novou verzi".
     fn render_update_check_status(&mut self, ui: &mut egui::Ui) {
         let tr = i18n::t(self.settings.lang);
+
+        match &self.update_install {
+            UpdateInstall::NotStarted => {}
+            UpdateInstall::Installing => {
+                // `animate(true)` bez presneho `progress` (`self_update`
+                // v pouzite verzi 0.41 zadny prubezny callback nenabizi -
+                // stahovani+instalace+vymena binarky je jedno blokujici
+                // volani, viz `termx-update/src/lib.rs::self_update`) -
+                // misto presneho procenta jde aspon o animovany
+                // "pracuje se" pruh, at neni obrazovka uplne mrtva.
+                ui.add(egui::ProgressBar::new(0.5).animate(true).text(tr.updating_in_progress));
+                return;
+            }
+            UpdateInstall::Done(version) => {
+                ui.colored_label(theme::ACCENT, i18n::update_installed(self.settings.lang, version));
+                if ui.button(tr.btn_restart_now).clicked() {
+                    self.restart_into_new_version(ui.ctx());
+                }
+                return;
+            }
+            UpdateInstall::Failed(e) => {
+                ui.colored_label(theme::DANGER, i18n::update_install_failed(self.settings.lang, e));
+                if ui.button(tr.btn_update_now).clicked() {
+                    self.start_update_install();
+                }
+                return;
+            }
+        }
+
         match &self.update_check {
             UpdateCheck::NotStarted | UpdateCheck::Checking => {
                 ui.label(egui::RichText::new(tr.checking_update).small());
             }
+            UpdateCheck::Disabled => {}
             UpdateCheck::UpToDate => {
                 ui.colored_label(theme::ACCENT, tr.up_to_date);
             }
             UpdateCheck::Available(latest) => {
+                // `release_url` se vytahne jako VLASTNI (`String`) JESTE
+                // PRED `ui.horizontal` nize - `latest` je pujcka z
+                // `self.update_check` (viz `match &self.update_check`
+                // vyse) a uzavreni (`|ui| { ... }`) by si ji jinak drzelo
+                // pujcenou po celou dobu sveho tela, coz by kolidovalo s
+                // `self.start_update_install()` (potrebuje `&mut self`)
+                // hned vedle.
+                let release_url = latest.url.clone();
                 ui.colored_label(egui::Color32::from_rgb(0xe6, 0xc2, 0x5a), i18n::update_available(self.settings.lang, &latest.version));
-                if ui.button(tr.btn_open_release_page).clicked() {
-                    ui.ctx().open_url(egui::OpenUrl {
-                        url: latest.url.clone(),
-                        new_tab: true,
-                    });
-                }
+                ui.horizontal(|ui| {
+                    if ui.button(tr.btn_update_now).clicked() {
+                        self.start_update_install();
+                    }
+                    if ui.button(tr.btn_open_release_page).clicked() {
+                        ui.ctx().open_url(egui::OpenUrl {
+                            url: release_url.clone(),
+                            new_tab: true,
+                        });
+                    }
+                });
             }
             UpdateCheck::Failed(e) => {
                 ui.label(egui::RichText::new(i18n::update_check_failed(self.settings.lang, e)).small());
@@ -1497,6 +1599,71 @@ impl MainApp {
                 self.update_rx = None;
             }
         }
+    }
+
+    /// Spusti SKUTECNE stahovani/instalaci nove verze na samostatnem
+    /// vlakne (`termx_update::self_update`, stejna funkce, jakou drive
+    /// pri kazdem startu volalo primo `main.rs` - viz tamni poznamka) -
+    /// klikem na tlacitko "Aktualizovat" v Home tabu/dialogu "O
+    /// programu" (`render_update_check_status`), NE uz automaticky.
+    fn start_update_install(&mut self) {
+        self.update_install = UpdateInstall::Installing;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let current_version = env!("CARGO_PKG_VERSION").to_string();
+        std::thread::spawn(move || {
+            let result = termx_update::self_update(&current_version).map(|outcome| outcome.version).map_err(|e| e.to_string());
+            // Prijemce uz nemusi existovat (napr. aplikace se mezitim
+            // zavrela) - poslani se pak proste nezdari, nic se nedeje.
+            let _ = tx.send(result);
+        });
+        self.install_rx = Some(rx);
+    }
+
+    /// Vyzvedne vysledek instalace, pokud uz z pozadi dorazil (nikdy
+    /// neceka - `try_recv`) - obdoba `poll_update_check`.
+    fn poll_update_install(&mut self) {
+        let Some(rx) = &self.install_rx else { return };
+        match rx.try_recv() {
+            Ok(Ok(version)) => {
+                self.update_install = UpdateInstall::Done(version);
+                self.install_rx = None;
+            }
+            Ok(Err(e)) => {
+                self.update_install = UpdateInstall::Failed(e);
+                self.install_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                // Jeste nic - zkusi se znovu pristi snimek.
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.update_install = UpdateInstall::Failed("instalace neocekavane skoncila".to_string());
+                self.install_rx = None;
+            }
+        }
+    }
+
+    /// Spusti NOVOU binarku (`self_update` ji nahradila presne na
+    /// miste te aktualne bezici, viz `termx-update/src/lib.rs`) jako
+    /// samostatny proces a tento (stary, jeste bezici) proces pozada o
+    /// bezne zavreni - klik na "Spustit novou verzi"
+    /// (`render_update_check_status`, `UpdateInstall::Done`).
+    ///
+    /// ZAMERNE `ctx.send_viewport_cmd(ViewportCommand::Close)` (stejny
+    /// zpusob, jakym appku zavira i "Terminál -> Konec" v hornim menu),
+    /// NE rovnou `std::process::exit` - to by obesio normalni eframe
+    /// vypinaci sekvenci (`eframe::App::save`, viz `TermxApp::save`
+    /// nize), takze kdyby uzivatel tesne pred restartem zmenil napr.
+    /// nastaveni (tema, velikost pisma, polohu okna), tato zmena by se
+    /// nestihla ulozit a po restartu by byla ztracena.
+    fn restart_into_new_version(&self, ctx: &egui::Context) {
+        if let Ok(exe) = std::env::current_exe() {
+            // Nova binarka uz na tomto miste lezi (viz vyse) - kdyby se
+            // presto spusteni nezdarilo (napr. soubor mezitim smazan
+            // antivirem), nezbyva nez to tise vzdat; uzivatel muze
+            // appku pustit rucne stejne jako drive.
+            let _ = std::process::Command::new(exe).spawn();
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     /// Home tab - nahore vestaveny formular pro pripojeni k novemu
@@ -3095,6 +3262,7 @@ impl MainApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.maybe_start_update_check();
         self.poll_update_check();
+        self.poll_update_install();
 
         // Globalni zkratka Ctrl+Tab pro prepnuti fokusu mezi panely
         // rozdeleneho zobrazeni (viz `split_marks`/`render_split_view` a
@@ -3252,6 +3420,13 @@ pub struct TermxApp {
     /// zamceny/odemceny (okno jde maximalizovat i na zamcene
     /// obrazovce).
     window_maximized: bool,
+    /// Prepnuto z `--no-update` (viz `main.rs`) - preda se do
+    /// [`MainApp::new`]/[`MainApp::new_guest`], ktere podle toho
+    /// nastavi pocatecni `UpdateCheck::Disabled` misto `NotStarted`
+    /// (viz tam), cimz se vypne automaticka kontrola aktualizace pri
+    /// startu (rucni tlacitko v dialogu "O programu" i tak funguje
+    /// dal).
+    skip_update_check: bool,
 }
 
 impl TermxApp {
@@ -3259,7 +3434,7 @@ impl TermxApp {
     /// `lib.rs` - odtud se (pokud existuje) hned pri startu nactou drive
     /// ulozena nastaveni (viz [`AppSettings`]); kdyz zadna jeste
     /// neexistuji (prvni spusteni), pouzije se `AppSettings::default()`.
-    pub fn new(vault_path: PathBuf, registry: ModuleRegistry, storage: Option<&dyn eframe::Storage>) -> Self {
+    pub fn new(vault_path: PathBuf, registry: ModuleRegistry, storage: Option<&dyn eframe::Storage>, skip_update_check: bool) -> Self {
         let initial_settings: AppSettings = storage.and_then(|s| eframe::get_value(s, SETTINGS_STORAGE_KEY)).unwrap_or_default();
         let window_maximized = initial_settings.window_maximized;
         Self {
@@ -3268,6 +3443,7 @@ impl TermxApp {
             state: LockState::Locked(LockScreen::default()),
             initial_settings,
             window_maximized,
+            skip_update_check,
         }
     }
 
@@ -3386,7 +3562,12 @@ impl TermxApp {
 
         if skip {
             let registry = self.registry.take().expect("registry byl jiz spotrebovan");
-            self.state = LockState::Unlocked(MainApp::new_guest(self.vault_path.clone(), registry, self.initial_settings.clone()));
+            self.state = LockState::Unlocked(MainApp::new_guest(
+                self.vault_path.clone(),
+                registry,
+                self.initial_settings.clone(),
+                self.skip_update_check,
+            ));
             return;
         }
 
@@ -3407,8 +3588,14 @@ impl TermxApp {
         match outcome {
             Ok(vault) => {
                 let registry = self.registry.take().expect("registry byl jiz spotrebovan");
-                self.state =
-                    LockState::Unlocked(MainApp::new(vault, self.vault_path.clone(), password, registry, self.initial_settings.clone()));
+                self.state = LockState::Unlocked(MainApp::new(
+                    vault,
+                    self.vault_path.clone(),
+                    password,
+                    registry,
+                    self.initial_settings.clone(),
+                    self.skip_update_check,
+                ));
             }
             Err(e) => {
                 let LockState::Locked(screen) = &mut self.state else { return };

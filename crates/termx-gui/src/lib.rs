@@ -46,7 +46,11 @@ const ICON_BYTES: &[u8] = include_bytes!("../../../assets/icons/hicolor/128x128/
 /// `Vault` - jen cestu k souboru trezoru (`vault_path`). Odemceni (nebo
 /// nastaveni hesla pro novy trezor) resi az samotne GUI na uvodni
 /// obrazovce po otevreni okna.
-pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry) -> anyhow::Result<()> {
+///
+/// `skip_update_check` odpovida CLI prepinaci `--no-update` (`main.rs`) -
+/// preda se dal do [`app::TermxApp::new`], ktere ho pouzije pro
+/// pocatecni stav kontroly aktualizace v Home tabu (viz tam).
+pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry, skip_update_check: bool) -> anyhow::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1150.0, 720.0])
@@ -67,7 +71,7 @@ pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry) -> anyhow::Result<
         "Term-IX",
         native_options,
         Box::new(move |cc| {
-            let app = app::TermxApp::new(vault_path, registry, cc.storage);
+            let app = app::TermxApp::new(vault_path, registry, cc.storage, skip_update_check);
             // Tema se aplikuje az PO nacteni `AppSettings` (uvnitr
             // `TermxApp::new`) - viz `TermxApp::initial_theme` - aby se
             // uz od prvniho snimku pouzilo ulozene uzivatelovo tema, ne

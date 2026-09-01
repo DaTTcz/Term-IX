@@ -105,6 +105,12 @@ pub struct Strings {
     /// sbaleny na uzky pruh.
     pub btn_show_sidebar: &'static str,
     pub btn_check_updates: &'static str,
+    /// Zahaji SKUTECNE stahovani/instalaci nove verze (`MainApp::start_update_install`) -
+    /// viz [`UpdateInstall`](crate::app) v `app.rs`.
+    pub btn_update_now: &'static str,
+    /// Po dokoncene instalaci spusti novou verzi a tuto (starou) ukonci
+    /// (`MainApp::restart_into_new_version`).
+    pub btn_restart_now: &'static str,
 
     // -- Home tab (`MainApp::render_home`) --
     pub home_heading: &'static str,
@@ -114,6 +120,8 @@ pub struct Strings {
     pub version_label: &'static str,
     pub checking_update: &'static str,
     pub up_to_date: &'static str,
+    /// Text primo v animovanem pruhu prubehu behem `UpdateInstall::Installing`.
+    pub updating_in_progress: &'static str,
 
     // -- horni menu (`MainApp::top_menu`) --
     pub menu_terminal: &'static str,
@@ -316,6 +324,8 @@ pub const CS: Strings = Strings {
     btn_hide_sidebar: "Skrýt boční panel",
     btn_show_sidebar: "Zobrazit boční panel",
     btn_check_updates: "Zkontrolovat aktualizace",
+    btn_update_now: "Aktualizovat",
+    btn_restart_now: "Spustit novou verzi",
 
     home_heading: "Připojit k novému serveru",
     home_save_checkbox: "Uložit server do trezoru",
@@ -325,6 +335,7 @@ pub const CS: Strings = Strings {
     version_label: "verze",
     checking_update: "Kontroluji dostupnost aktualizace…",
     up_to_date: "Máte nejnovější verzi.",
+    updating_in_progress: "Stahuji a instaluji novou verzi…",
 
     menu_terminal: "Terminál",
     menu_terminal_exit: "Ukončit",
@@ -498,6 +509,8 @@ pub const EN: Strings = Strings {
     btn_hide_sidebar: "Hide sidebar",
     btn_show_sidebar: "Show sidebar",
     btn_check_updates: "Check for updates",
+    btn_update_now: "Update",
+    btn_restart_now: "Launch new version",
 
     home_heading: "Connect to a new server",
     home_save_checkbox: "Save server to the vault",
@@ -507,6 +520,7 @@ pub const EN: Strings = Strings {
     version_label: "version",
     checking_update: "Checking for updates…",
     up_to_date: "You have the latest version.",
+    updating_in_progress: "Downloading and installing the new version…",
 
     menu_terminal: "Terminal",
     menu_terminal_exit: "Exit",
@@ -666,6 +680,23 @@ pub fn update_available(lang: Lang, version: &str) -> String {
     match lang {
         Lang::Cs => format!("Dostupná je nová verze {version}."),
         Lang::En => format!("A new version {version} is available."),
+    }
+}
+
+/// `UpdateInstall::Done` v `app.rs` - instalace uspesne dokoncena,
+/// ceka se na klik "Spustit novou verzi".
+pub fn update_installed(lang: Lang, version: &str) -> String {
+    match lang {
+        Lang::Cs => format!("Verze {version} je nainstalována."),
+        Lang::En => format!("Version {version} is installed."),
+    }
+}
+
+/// `UpdateInstall::Failed` v `app.rs`.
+pub fn update_install_failed(lang: Lang, err: &str) -> String {
+    match lang {
+        Lang::Cs => format!("Aktualizaci se nepodařilo nainstalovat ({err})."),
+        Lang::En => format!("Failed to install the update ({err})."),
     }
 }
 

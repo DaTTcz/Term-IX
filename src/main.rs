@@ -1,9 +1,20 @@
 //! Term-IX - binarni crate, ktery propojuje vsechny moduly dohromady:
 //! zaregistruje dostupne protokolove moduly (zatim termx-ssh) do GUI
-//! (termx-gui) a pred startem zkontroluje aktualizace (termx-update).
-//! Odemceni/vytvoreni sifrovaneho trezoru (termx-vault) uz resi az
-//! samotne GUI po otevreni hlavniho okna - zadne cmd okno k tomu neni
-//! potreba.
+//! (termx-gui). Odemceni/vytvoreni sifrovaneho trezoru (termx-vault) uz
+//! resi az samotne GUI po otevreni hlavniho okna - zadne cmd okno k
+//! tomu neni potreba.
+//!
+//! Kontrola/instalace aktualizaci (`termx-update`) uz NENI soucasti
+//! tohoto souboru - drive se delala VZDY automaticky a potichu tady,
+//! jeste pred otevrenim hlavniho okna (`check_for_updates`, ted uz
+//! smazano), coz podle zpetne vazby "spustil jsem program, startokno a
+//! konec nic mi to neřeklo a updatlo to samo" nedavalo uzivateli zadnou
+//! zpetnou vazbu ani moznost novou verzi rovnou spustit. Cely
+//! mechanismus je ted vestaveny primo v GUI (Home tab, viz
+//! `termx-gui/src/app.rs::render_update_check_status`) jako viditelny/
+//! ovladany krok - `--no-update` nize uz tedy vypina AUTOMATICKOU
+//! kontrolu PRI STARTU TAM (rucni tlacitko v dialogu "O programu" jde
+//! pouzit i tak), ne puvodni blokujici instalaci zde.
 //!
 //! Pridani noveho protokolu do aplikace = novy crate `termx-<protokol>`
 //! implementujici `termx_core::ProtocolModule` + jeden radek
@@ -27,7 +38,10 @@ use termx_core::{AppPaths, ModuleRegistry};
 #[derive(Parser)]
 #[command(name = "term-ix", version, about = "Term-IX - modularni terminalovy klient (SSH/Serial/FTP...)")]
 struct Cli {
-    /// Preskoci kontrolu aktualizaci pri startu.
+    /// Preskoci AUTOMATICKOU kontrolu aktualizaci pri startu (Home tab v
+    /// GUI, viz `termx-gui/src/app.rs::UpdateCheck`) - rucni tlacitko
+    /// "Zkontrolovat aktualizace" v dialogu "O programu" jde pouzit i
+    /// tak.
     #[arg(long)]
     no_update: bool,
 
@@ -54,10 +68,6 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    if !cli.no_update {
-        check_for_updates();
-    }
-
     let paths = AppPaths::new()?;
     paths.ensure_dirs()?;
     let vault_path = paths.vault_path();
@@ -72,23 +82,7 @@ fn main() -> anyhow::Result<()> {
     // vrstva/moduly samy, az bude vestaveny terminal skutecne pripojeny.
     // Samotne odemceni/vytvoreni trezoru (drive `prompt_master_password`
     // pres cmd konzoli) resi az GUI na uvodni obrazovce po otevreni okna.
-    termx_gui::run_app(vault_path, registry)
-}
-
-fn check_for_updates() {
-    match termx_update::self_update(env!("CARGO_PKG_VERSION")) {
-        Ok(outcome) if outcome.updated => {
-            println!(
-                "Term-IX byl aktualizovan na verzi {} - spustte aplikaci prosim znovu.",
-                outcome.version
-            );
-            std::process::exit(0);
-        }
-        Ok(_) => {}
-        Err(e) => {
-            eprintln!("Kontrola aktualizaci se nezdarila, pokracuji bez ni ({e}).");
-        }
-    }
+    termx_gui::run_app(vault_path, registry, cli.no_update)
 }
 
 /// Rekne Windows, ze si o vlastni vykreslovani/meritko umime rozhodnout

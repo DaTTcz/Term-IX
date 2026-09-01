@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
 authors = ["DaTTcz"]
 repository = "https://github.com/DaTTcz/Term-IX"
@@ -58,7 +58,6 @@ path = "src/main.rs"
 
 [dependencies]
 termx-core = { workspace = true }
-termx-update = { workspace = true }
 termx-ssh = { workspace = true }
 termx-splash = { workspace = true }
 termx-gui = { workspace = true }

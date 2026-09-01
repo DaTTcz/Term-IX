@@ -60,7 +60,7 @@ Přepínače: `--no-splash` přeskočí úvodní okno s logem, `--no-update` př
 
 ## 🔄 Aktualizace
 
-Appka si sama hlídá nové verze na GitHubu a při startu nabídne stažení a výměnu běžící binárky. Release proces (`.github/workflows/release.yml`) po vytvoření tagu `vX.Y.Z` automaticky zabuildí a nahraje binárky pro Windows i Linux.
+Appka si při startu na pozadí zkontroluje, jestli na GitHubu není novější verze, a pokud ano, na Home tabu se objeví tlačítko "Aktualizovat" (průběh stažení a instalace ukazuje pruh) a po dokončení tlačítko "Spustit novou verzi" pro rovnou přepnutí. Přepínač `--no-update` tuhle automatickou kontrolu při startu vypne. Release proces (`.github/workflows/release.yml`) po vytvoření tagu `vX.Y.Z` automaticky zabuildí a nahraje binárky pro Windows i Linux.
 
 ## 🔒 Bezpečnost uložených serverů
 
