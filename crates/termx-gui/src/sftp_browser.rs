@@ -55,6 +55,11 @@ pub struct SftpBrowser {
     /// Prubeh prave beziciho hromadneho prenosu slozky (done, total) -
     /// viz `SftpEvent::DirProgress`. `None`, kdyz zadny neprobiha.
     progress: Option<(usize, usize)>,
+    /// `true` mezi odeslanim `SftpCommand::List` a prijetim odpovedi
+    /// (`SftpEvent::Listing`/`Error`) - zobrazuje se jako "Načítám…" u
+    /// cesty, at je jasne, ze se na klik/navigaci neco deje (predtim
+    /// pri pomalejsim spojeni chvili vypadalo, ze se nestalo nic).
+    loading: bool,
     cred_username: String,
     cred_password: String,
 }
@@ -68,6 +73,7 @@ impl SftpBrowser {
             entries: Vec::new(),
             status: None,
             progress: None,
+            loading: false,
             cred_username: session_username(session),
             cred_password: String::new(),
         }
@@ -94,10 +100,12 @@ impl SftpBrowser {
                 }
                 Ok(SftpEvent::Error(msg)) => {
                     self.status = Some(StatusMsg::Error(msg));
+                    self.loading = false;
                 }
                 Ok(SftpEvent::Listing { path, entries }) => {
                     self.current_path = path;
                     self.entries = entries;
+                    self.loading = false;
                 }
                 Ok(SftpEvent::Downloaded { remote, local }) => {
                     self.status = Some(StatusMsg::Downloaded { remote, local });
@@ -126,6 +134,7 @@ impl SftpBrowser {
                     if self.state != SftpState::AwaitingCredentials {
                         self.state = SftpState::Disconnected;
                     }
+                    self.loading = false;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
@@ -135,6 +144,7 @@ impl SftpBrowser {
 
     fn request_list(&mut self, path: String) {
         let _ = self.handle.cmd_tx.send(SftpCommand::List(path));
+        self.loading = true;
     }
 
     /// Prelozi `self.status` (surova data, viz [`StatusMsg`]) do textu v
@@ -236,13 +246,37 @@ impl SftpBrowser {
             }
         });
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(&self.current_path).monospace());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(&self.current_path).monospace());
+            if self.loading {
+                ui.add_space(6.0);
+                ui.spinner();
+                ui.label(egui::RichText::new(tr.sftp_loading).weak());
+            }
+        });
         if let Some((done, total)) = self.progress {
-            ui.add_space(2.0);
-            ui.label(egui::RichText::new(format!("{}: {done}/{total}", tr.sftp_transferring)).small());
+            ui.add_space(4.0);
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(egui::RichText::new(format!("{}: {done}/{total}", tr.sftp_transferring)).strong());
+                });
+            });
         } else if let Some(status) = &status_text {
-            ui.add_space(2.0);
-            ui.label(egui::RichText::new(status).small());
+            // Vyrazny ohraniceny "banner" (misto puvodniho drobneho
+            // sedeho textu, ktery byl snadno prehlednutelny) - zelena
+            // pro uspesne dokonceni prenosu, cervena pro chybu (stejny
+            // odstin, jaky uz appka pouziva jinde pro chyby).
+            ui.add_space(4.0);
+            let is_error = matches!(self.status, Some(StatusMsg::Error(_)));
+            let color = if is_error {
+                egui::Color32::from_rgb(0xe0, 0x6c, 0x6c)
+            } else {
+                egui::Color32::from_rgb(0x6c, 0xba, 0x7e)
+            };
+            ui.group(|ui| {
+                ui.colored_label(color, egui::RichText::new(status).strong());
+            });
         }
         ui.add_space(6.0);
         ui.separator();

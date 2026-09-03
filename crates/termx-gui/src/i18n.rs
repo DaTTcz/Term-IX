@@ -172,6 +172,7 @@ pub struct Strings {
     pub btn_sftp_upload: &'static str,
     pub btn_sftp_upload_folder: &'static str,
     pub sftp_transferring: &'static str,
+    pub sftp_loading: &'static str,
     pub btn_sftp_download: &'static str,
     /// Tooltip ikonky "‖" v `tab_bar` pro oznaceni tabu do rozdeleneho
     /// zobrazeni (viz `MainApp::split_marks`/`toggle_split_mark`).
@@ -394,6 +395,7 @@ pub const CS: Strings = Strings {
     btn_sftp_upload: "Nahrát soubor...",
     btn_sftp_upload_folder: "Nahrát složku...",
     sftp_transferring: "Přenáším",
+    sftp_loading: "Načítám…",
     btn_sftp_download: "Stáhnout",
     connection_gone: "Tento server už neexistuje (byl smazán nebo šlo o dočasné rychlé spojení, které skončilo se zavřením tabu).",
     btn_split_mark: "Zobrazit vedle jiného tabu (rozdělené zobrazení)",
@@ -602,6 +604,7 @@ pub const EN: Strings = Strings {
     btn_sftp_upload: "Upload file...",
     btn_sftp_upload_folder: "Upload folder...",
     sftp_transferring: "Transferring",
+    sftp_loading: "Loading…",
     btn_sftp_download: "Download",
     connection_gone: "This server no longer exists (it was deleted, or it was a temporary quick connection that ended when its tab was closed).",
     btn_split_mark: "Show side by side with another tab (split view)",
