@@ -206,6 +206,83 @@ enum TabKind {
     Sftp(Uuid),
 }
 
+/// Zvoleny zpusob prihlaseni v editacnich formularich pro server
+/// (`NewSessionForm`, `EditSessionForm`, `QuickConnectForm`,
+/// `HomeConnectForm`) - promita se do skutecneho `AuthMethod` az pri
+/// odeslani formulare (viz `render_auth_fields` a prislusne `submit_*`
+/// funkce/`EditSessionForm::from_session`). `Agent` tu zamerne neni
+/// nabizeny - `AuthMethod::Agent` v SSH/SFTP modulu porad jen `bail!`uje
+/// (zatim neimplementovano), takze by ho stejne nešlo pouzit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthKind {
+    Password,
+    PrivateKey,
+}
+
+/// Spolecne UI pro vyber a vyplneni zpusobu prihlaseni (heslo / privatni
+/// klic) - pouziva se uvnitr jiz otevreneho 2-sloupcoveho `egui::Grid`
+/// vsech ctyr formularu vyse (nahrazuje puvodni samostatne opakovane
+/// radky "Heslo:"), aby se stejna logika nemusela ctyrikrat kopirovat.
+/// Prazdna `key_passphrase` znamena `AuthMethod::PrivateKey.passphrase == None`
+/// (klic bez pasfraze) - viz prevod v prislusnych `submit_*` funkcich.
+fn render_auth_fields(
+    ui: &mut egui::Ui,
+    tr: &i18n::Strings,
+    auth_kind: &mut AuthKind,
+    username: &mut String,
+    password: &mut String,
+    key_path: &mut String,
+    key_passphrase: &mut String,
+) {
+    ui.label(tr.field_username);
+    ui.text_edit_singleline(username);
+    ui.end_row();
+
+    ui.label(tr.field_auth_kind);
+    ui.horizontal(|ui| {
+        ui.radio_value(auth_kind, AuthKind::Password, tr.auth_kind_password);
+        ui.radio_value(auth_kind, AuthKind::PrivateKey, tr.auth_kind_key);
+    });
+    ui.end_row();
+
+    match auth_kind {
+        AuthKind::Password => {
+            ui.label(tr.field_password);
+            ui.add(egui::TextEdit::singleline(password).password(true));
+            ui.end_row();
+        }
+        AuthKind::PrivateKey => {
+            ui.label(tr.field_key_path);
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(key_path);
+                if ui.small_button(tr.btn_choose_key_file).clicked() {
+                    if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        *key_path = path.display().to_string();
+                    }
+                }
+            });
+            ui.end_row();
+
+            ui.label(tr.field_key_passphrase);
+            ui.add(egui::TextEdit::singleline(key_passphrase).password(true));
+            ui.end_row();
+        }
+    }
+}
+
+/// Sestavi `AuthMethod` z hodnot formulare (viz `render_auth_fields`) -
+/// pouziva se pri odeslani vsech ctyr formularu nize.
+fn build_auth_method(auth_kind: AuthKind, username: &str, password: &str, key_path: &str, key_passphrase: &str) -> AuthMethod {
+    match auth_kind {
+        AuthKind::Password => AuthMethod::Password { username: username.to_string(), password: password.to_string() },
+        AuthKind::PrivateKey => AuthMethod::PrivateKey {
+            username: username.to_string(),
+            key_path: key_path.to_string(),
+            passphrase: if key_passphrase.is_empty() { None } else { Some(key_passphrase.to_string()) },
+        },
+    }
+}
+
 struct NewSessionForm {
     name: String,
     folder: String,
@@ -213,6 +290,10 @@ struct NewSessionForm {
     port: String,
     username: String,
     password: String,
+    /// Viz [`AuthKind`]/`render_auth_fields`.
+    auth_kind: AuthKind,
+    key_path: String,
+    key_passphrase: String,
     /// `false` jen do prvniho vykresleni tohoto dialogu - pak se pole
     /// "Název:" samo fokusne, aby slo rovnou psat bez nutnosti tam
     /// nejdriv kliknout (viz pozadavek "+server , + složka, vyskakovacímu
@@ -231,6 +312,9 @@ impl Default for NewSessionForm {
             port: "22".to_string(),
             username: String::new(),
             password: String::new(),
+            auth_kind: AuthKind::Password,
+            key_path: String::new(),
+            key_passphrase: String::new(),
             focus_requested: false,
         }
     }
@@ -250,6 +334,10 @@ struct EditSessionForm {
     port: String,
     username: String,
     password: String,
+    /// Viz [`AuthKind`]/`render_auth_fields`.
+    auth_kind: AuthKind,
+    key_path: String,
+    key_passphrase: String,
     /// Viz `NewSessionForm::focus_requested` - stejny ucel (fokus na
     /// pole "Název:" hned pri otevreni dialogu).
     focus_requested: bool,
@@ -257,14 +345,21 @@ struct EditSessionForm {
 
 impl EditSessionForm {
     fn from_session(session: &Session) -> Self {
-        // Aplikace zatim umi zakladat/editovat jen `AuthMethod::Password`
-        // (viz `NewSessionForm`/`QuickConnectForm`/`HomeConnectForm`) -
-        // u ostatnich variant (PrivateKey/Agent/None, zatim nikde v UI
-        // nezalozitelnych) se pole proste predvyplni prazdna, at editaci
+        // U `AuthMethod::Agent`/`None` (zatim nikde v UI nezalozitelnych)
+        // se pole proste predvyplni jako prazdne heslo, at editaci
         // formulare nic neblokuje.
-        let (username, password) = match &session.auth {
-            AuthMethod::Password { username, password } => (username.clone(), password.clone()),
-            _ => (String::new(), String::new()),
+        let (auth_kind, username, password, key_path, key_passphrase) = match &session.auth {
+            AuthMethod::Password { username, password } => {
+                (AuthKind::Password, username.clone(), password.clone(), String::new(), String::new())
+            }
+            AuthMethod::PrivateKey { username, key_path, passphrase } => (
+                AuthKind::PrivateKey,
+                username.clone(),
+                String::new(),
+                key_path.clone(),
+                passphrase.clone().unwrap_or_default(),
+            ),
+            _ => (AuthKind::Password, String::new(), String::new(), String::new(), String::new()),
         };
         Self {
             id: session.id,
@@ -274,6 +369,9 @@ impl EditSessionForm {
             port: session.port.to_string(),
             username,
             password,
+            auth_kind,
+            key_path,
+            key_passphrase,
             focus_requested: false,
         }
     }
@@ -291,6 +389,10 @@ struct QuickConnectForm {
     port: String,
     username: String,
     password: String,
+    /// Viz [`AuthKind`]/`render_auth_fields`.
+    auth_kind: AuthKind,
+    key_path: String,
+    key_passphrase: String,
     /// Viz `NewSessionForm::focus_requested`.
     focus_requested: bool,
 }
@@ -303,6 +405,9 @@ impl Default for QuickConnectForm {
             port: "22".to_string(),
             username: String::new(),
             password: String::new(),
+            auth_kind: AuthKind::Password,
+            key_path: String::new(),
+            key_passphrase: String::new(),
             focus_requested: false,
         }
     }
@@ -328,6 +433,10 @@ struct HomeConnectForm {
     port: String,
     username: String,
     password: String,
+    /// Viz [`AuthKind`]/`render_auth_fields`.
+    auth_kind: AuthKind,
+    key_path: String,
+    key_passphrase: String,
     save: bool,
 }
 
@@ -340,6 +449,9 @@ impl Default for HomeConnectForm {
             port: "22".to_string(),
             username: String::new(),
             password: String::new(),
+            auth_kind: AuthKind::Password,
+            key_path: String::new(),
+            key_passphrase: String::new(),
             save: true,
         }
     }
@@ -1795,13 +1907,15 @@ impl MainApp {
                         ui.text_edit_singleline(&mut self.home_connect_form.port);
                         ui.end_row();
 
-                        ui.label(tr.field_username);
-                        ui.text_edit_singleline(&mut self.home_connect_form.username);
-                        ui.end_row();
-
-                        ui.label(tr.field_password);
-                        ui.add(egui::TextEdit::singleline(&mut self.home_connect_form.password).password(true));
-                        ui.end_row();
+                        render_auth_fields(
+                            ui,
+                            tr,
+                            &mut self.home_connect_form.auth_kind,
+                            &mut self.home_connect_form.username,
+                            &mut self.home_connect_form.password,
+                            &mut self.home_connect_form.key_path,
+                            &mut self.home_connect_form.key_passphrase,
+                        );
                     });
                 });
             });
@@ -1867,12 +1981,17 @@ impl MainApp {
         }
         let port: u16 = self.home_connect_form.port.trim().parse().unwrap_or(22);
         let name = if self.home_connect_form.name.trim().is_empty() { host.clone() } else { self.home_connect_form.name.clone() };
-        let username = self.home_connect_form.username.clone();
-        let password = self.home_connect_form.password.clone();
+        let auth = build_auth_method(
+            self.home_connect_form.auth_kind,
+            &self.home_connect_form.username,
+            &self.home_connect_form.password,
+            &self.home_connect_form.key_path,
+            &self.home_connect_form.key_passphrase,
+        );
         let folder = self.home_connect_form.folder.trim().to_string();
         let save = self.home_connect_form.save && !self.is_guest;
 
-        let mut session = Session::new(name, Protocol::Ssh, host, port, AuthMethod::Password { username, password });
+        let mut session = Session::new(name, Protocol::Ssh, host, port, auth);
         let id = session.id;
 
         if save {
@@ -2198,13 +2317,15 @@ impl MainApp {
                     ui.text_edit_singleline(&mut form.port);
                     ui.end_row();
 
-                    ui.label(tr.field_username);
-                    ui.text_edit_singleline(&mut form.username);
-                    ui.end_row();
-
-                    ui.label(tr.field_password);
-                    ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
-                    ui.end_row();
+                    render_auth_fields(
+                        ui,
+                        tr,
+                        &mut form.auth_kind,
+                        &mut form.username,
+                        &mut form.password,
+                        &mut form.key_path,
+                        &mut form.key_passphrase,
+                    );
                 });
 
                 ui.add_space(8.0);
@@ -2225,16 +2346,8 @@ impl MainApp {
         if submit {
             let port: u16 = form.port.trim().parse().unwrap_or(22);
             let name = if form.name.trim().is_empty() { form.host.clone() } else { form.name.clone() };
-            let mut session = Session::new(
-                name,
-                Protocol::Ssh,
-                form.host.clone(),
-                port,
-                AuthMethod::Password {
-                    username: form.username.clone(),
-                    password: form.password.clone(),
-                },
-            );
+            let auth = build_auth_method(form.auth_kind, &form.username, &form.password, &form.key_path, &form.key_passphrase);
+            let mut session = Session::new(name, Protocol::Ssh, form.host.clone(), port, auth);
             let folder = form.folder.trim();
             if !folder.is_empty() {
                 session.group = Some(folder.to_string());
@@ -2285,13 +2398,15 @@ impl MainApp {
                     ui.text_edit_singleline(&mut form.port);
                     ui.end_row();
 
-                    ui.label(tr.field_username);
-                    ui.text_edit_singleline(&mut form.username);
-                    ui.end_row();
-
-                    ui.label(tr.field_password);
-                    ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
-                    ui.end_row();
+                    render_auth_fields(
+                        ui,
+                        tr,
+                        &mut form.auth_kind,
+                        &mut form.username,
+                        &mut form.password,
+                        &mut form.key_path,
+                        &mut form.key_passphrase,
+                    );
                 });
 
                 ui.add_space(8.0);
@@ -2321,7 +2436,7 @@ impl MainApp {
                 session.name = if form.name.trim().is_empty() { form.host.clone() } else { form.name.clone() };
                 session.host = form.host.clone();
                 session.port = port;
-                session.auth = AuthMethod::Password { username: form.username.clone(), password: form.password.clone() };
+                session.auth = build_auth_method(form.auth_kind, &form.username, &form.password, &form.key_path, &form.key_passphrase);
                 let folder = form.folder.trim();
                 session.group = if folder.is_empty() { None } else { Some(folder.to_string()) };
                 true
@@ -2804,13 +2919,15 @@ impl MainApp {
                     ui.text_edit_singleline(&mut form.port);
                     ui.end_row();
 
-                    ui.label(tr.field_username);
-                    ui.text_edit_singleline(&mut form.username);
-                    ui.end_row();
-
-                    ui.label(tr.field_password);
-                    ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
-                    ui.end_row();
+                    render_auth_fields(
+                        ui,
+                        tr,
+                        &mut form.auth_kind,
+                        &mut form.username,
+                        &mut form.password,
+                        &mut form.key_path,
+                        &mut form.key_passphrase,
+                    );
                 });
 
                 ui.add_space(6.0);
@@ -2834,16 +2951,8 @@ impl MainApp {
         if submit {
             let port: u16 = form.port.trim().parse().unwrap_or(22);
             let name = if form.name.trim().is_empty() { form.host.clone() } else { form.name.clone() };
-            let session = Session::new(
-                name,
-                Protocol::Ssh,
-                form.host.clone(),
-                port,
-                AuthMethod::Password {
-                    username: form.username.clone(),
-                    password: form.password.clone(),
-                },
-            );
+            let auth = build_auth_method(form.auth_kind, &form.username, &form.password, &form.key_path, &form.key_passphrase);
+            let session = Session::new(name, Protocol::Ssh, form.host.clone(), port, auth);
             let id = session.id;
             self.ad_hoc_sessions.push(session);
             self.open_session_tab(id);

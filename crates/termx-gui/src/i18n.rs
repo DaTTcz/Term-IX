@@ -68,6 +68,14 @@ pub struct Strings {
     pub field_port: &'static str,
     pub field_username: &'static str,
     pub field_password: &'static str,
+    /// Label radku s prepinacem hesla/klice ve formularich pro server -
+    /// viz `render_auth_fields`.
+    pub field_auth_kind: &'static str,
+    pub auth_kind_password: &'static str,
+    pub auth_kind_key: &'static str,
+    pub field_key_path: &'static str,
+    pub btn_choose_key_file: &'static str,
+    pub field_key_passphrase: &'static str,
 
     // -- spolecna tlacitka --
     pub btn_add: &'static str,
@@ -317,6 +325,12 @@ pub const CS: Strings = Strings {
     field_port: "Port:",
     field_username: "Uživatel:",
     field_password: "Heslo:",
+    field_auth_kind: "Přihlášení:",
+    auth_kind_password: "Heslo",
+    auth_kind_key: "Privátní klíč",
+    field_key_path: "Soubor klíče:",
+    btn_choose_key_file: "Vybrat soubor...",
+    field_key_passphrase: "Pasfráze (volitelné):",
 
     btn_add: "Přidat",
     btn_save: "Uložit",
@@ -526,6 +540,12 @@ pub const EN: Strings = Strings {
     field_port: "Port:",
     field_username: "Username:",
     field_password: "Password:",
+    field_auth_kind: "Sign in:",
+    auth_kind_password: "Password",
+    auth_kind_key: "Private key",
+    field_key_path: "Key file:",
+    btn_choose_key_file: "Choose file...",
+    field_key_passphrase: "Passphrase (optional):",
 
     btn_add: "Add",
     btn_save: "Save",

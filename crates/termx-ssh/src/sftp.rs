@@ -235,24 +235,35 @@ fn collect_local_files(local_root: &std::path::Path) -> anyhow::Result<Vec<(Path
     Ok(files)
 }
 
+/// Prihlaseni privatnim klicem - lokalni kopie `session.rs::authenticate_private_key`
+/// (SFTP relace je zamerne zcela nezavisle spojeni, viz modulovy komentar
+/// nahore, takze si tuto malou funkci nesdili pres modul).
+async fn authenticate_private_key(
+    handle: &mut russh::client::Handle<TofuHandler>,
+    username: &str,
+    key_path: &str,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    if username.trim().is_empty() {
+        anyhow::bail!("pro přihlášení privátním klíčem musí být v nastavení serveru vyplněné uživatelské jméno");
+    }
+    let keypair = russh_keys::load_secret_key(key_path, passphrase)
+        .map_err(|e| anyhow::anyhow!("nelze načíst privátní klíč ({key_path}): {e}"))?;
+    let authenticated = handle
+        .authenticate_publickey(username, Arc::new(keypair))
+        .await
+        .map_err(|e| anyhow::anyhow!("SSH autentizace klíčem selhala: {e}"))?;
+    if !authenticated {
+        anyhow::bail!("SSH server odmítl přihlášení tímto privátním klíčem (zkontrolujte cestu ke klíči, pasfrázi a uživatelské jméno)");
+    }
+    Ok(())
+}
+
 async fn run_sftp_session(
     session: &Session,
     cmd_rx: &mut tokio::sync::mpsc::UnboundedReceiver<SftpCommand>,
     event_tx: &std::sync::mpsc::Sender<SftpEvent>,
 ) -> anyhow::Result<()> {
-    let early_auth = match &session.auth {
-        AuthMethod::Password { username, password } if !username.trim().is_empty() => {
-            Some((username.clone(), password.clone()))
-        }
-        AuthMethod::PrivateKey { .. } => {
-            anyhow::bail!("přihlášení privátním klíčem zatím není v SFTP prohlížeči implementováno")
-        }
-        AuthMethod::Agent { .. } => {
-            anyhow::bail!("přihlášení přes ssh-agent zatím není v SFTP prohlížeči implementováno")
-        }
-        AuthMethod::Password { .. } | AuthMethod::None => None,
-    };
-
     let config = Arc::new(russh::client::Config::default());
     let addr = (session.host.as_str(), session.port);
 
@@ -260,37 +271,57 @@ async fn run_sftp_session(
         .await
         .map_err(|e| anyhow::anyhow!("SSH připojení selhalo: {e}"))?;
 
-    // Stejna smycka opakovanych pokusu jako `session.rs::run_session` -
-    // viz tam pro podrobne zduvodneni (zpetna vazba "když nemáme login
-    // úspěšný tak už se k zadání nedostaneme").
-    let mut creds = early_auth;
-    if creds.is_none() {
-        let _ = event_tx.send(SftpEvent::AwaitingCredentials);
-    }
-    loop {
-        let (username, password) = match creds.take() {
-            Some(c) => c,
-            None => loop {
-                match cmd_rx.recv().await {
-                    Some(SftpCommand::Credentials { username, password }) => break (username, password),
-                    Some(_) => continue,
-                    None => return Ok(()),
-                }
-            },
-        };
-
-        let authenticated = handle
-            .authenticate_password(&username, &password)
-            .await
-            .map_err(|e| anyhow::anyhow!("SSH autentizace selhala: {e}"))?;
-
-        if authenticated {
-            break;
+    // Rozliseni podle zpusobu prihlaseni - viz `session.rs::run_session`
+    // pro stejny vzor a podrobne zduvodneni. `PrivateKey` (na rozdil od
+    // hesla) nema zadny interaktivni "zkus znovu" cyklus.
+    match &session.auth {
+        AuthMethod::PrivateKey { username, key_path, passphrase } => {
+            authenticate_private_key(&mut handle, username, key_path, passphrase.as_deref()).await?;
         }
+        AuthMethod::Agent { .. } => {
+            anyhow::bail!("přihlášení přes ssh-agent zatím není v SFTP prohlížeči implementováno")
+        }
+        AuthMethod::Password { .. } | AuthMethod::None => {
+            let early_auth = match &session.auth {
+                AuthMethod::Password { username, password } if !username.trim().is_empty() => {
+                    Some((username.clone(), password.clone()))
+                }
+                _ => None,
+            };
 
-        let _ = event_tx.send(SftpEvent::AuthFailed(
-            "SSH autentizace odmítnuta - zkontrolujte uživatelské jméno a heslo".to_string(),
-        ));
+            // Stejna smycka opakovanych pokusu jako `session.rs::run_session` -
+            // viz tam pro podrobne zduvodneni (zpetna vazba "když nemáme login
+            // úspěšný tak už se k zadání nedostaneme").
+            let mut creds = early_auth;
+            if creds.is_none() {
+                let _ = event_tx.send(SftpEvent::AwaitingCredentials);
+            }
+            loop {
+                let (username, password) = match creds.take() {
+                    Some(c) => c,
+                    None => loop {
+                        match cmd_rx.recv().await {
+                            Some(SftpCommand::Credentials { username, password }) => break (username, password),
+                            Some(_) => continue,
+                            None => return Ok(()),
+                        }
+                    },
+                };
+
+                let authenticated = handle
+                    .authenticate_password(&username, &password)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("SSH autentizace selhala: {e}"))?;
+
+                if authenticated {
+                    break;
+                }
+
+                let _ = event_tx.send(SftpEvent::AuthFailed(
+                    "SSH autentizace odmítnuta - zkontrolujte uživatelské jméno a heslo".to_string(),
+                ));
+            }
+        }
     }
 
     let channel = handle
