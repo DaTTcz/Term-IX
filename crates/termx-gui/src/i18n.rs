@@ -229,6 +229,7 @@ pub struct Strings {
 
     // -- strom serveru (`MainApp::show_tree`/`render_folder_contents`/`render_session_row`) --
     pub vault_save_failed: &'static str,
+    pub vault_backup_failed: &'static str,
 
     // -- hostovsky rezim: prihlasovaci formular v levem panelu
     // (`render_guest_login`) --
@@ -261,6 +262,12 @@ pub struct Strings {
     pub settings_ssh_loss_heading: &'static str,
     pub settings_auto_reconnect_checkbox: &'static str,
     pub settings_auto_reconnect_note: &'static str,
+    pub settings_backup_heading: &'static str,
+    pub settings_backup_note: &'static str,
+    pub settings_backup_folder_label: &'static str,
+    pub settings_backup_folder_none: &'static str,
+    pub btn_choose_backup_folder: &'static str,
+    pub btn_clear_backup_folder: &'static str,
 
     // -- zamcena obrazovka (`TermxApp::render_lock_screen`) --
     pub lock_unlock_prompt: &'static str,
@@ -417,6 +424,7 @@ pub const CS: Strings = Strings {
     import_open_dialog_title: "Importovat trezor...",
 
     vault_save_failed: "Uložení trezoru selhalo",
+    vault_backup_failed: "Záloha trezoru se nezdařila",
 
     guest_mode_heading: "Hostovský režim",
     guest_mode_hint: "Uložené servery nejsou vidět.",
@@ -447,6 +455,14 @@ pub const CS: Strings = Strings {
                                     tab se jen zbarví, aby bylo na první pohled vidět, že je mrtvé - obnovit ho pak \
                                     jde ručně tlačítkem přímo v tabu terminálu. Když je zapnuto, aplikace se navíc \
                                     sama periodicky pokouší spojení obnovit.",
+    settings_backup_heading: "Záloha trezoru",
+    settings_backup_note: "Po každém uložení trezoru se navíc zapíše šifrovaná kopie do zvolené složky - třeba \
+                           té, kterou ti hlídá Nextcloud, OneDrive nebo podobná synchronizace. Kopie je \
+                           zašifrovaná úplně stejně jako hlavní trezor, takže je bezpečné ji takhle zálohovat.",
+    settings_backup_folder_label: "Záložní složka:",
+    settings_backup_folder_none: "(nenastaveno)",
+    btn_choose_backup_folder: "Vybrat složku...",
+    btn_clear_backup_folder: "Vypnout zálohu",
 
     lock_unlock_prompt: "Zadejte hlavní heslo trezoru:",
     lock_create_prompt: "Trezor ještě neexistuje – nastavte hlavní heslo:",
@@ -602,6 +618,7 @@ pub const EN: Strings = Strings {
     import_open_dialog_title: "Import vault...",
 
     vault_save_failed: "Saving the vault failed",
+    vault_backup_failed: "Vault backup failed",
 
     guest_mode_heading: "Guest mode",
     guest_mode_hint: "Saved servers aren't visible.",
@@ -632,6 +649,14 @@ pub const EN: Strings = Strings {
                                     tab just changes color so it's clear at a glance it's dead - it can then \
                                     be restored manually with the button right in the terminal tab. When on, \
                                     the app additionally tries to restore the connection by itself periodically.",
+    settings_backup_heading: "Vault backup",
+    settings_backup_note: "After every vault save, an extra encrypted copy is written to the chosen folder - \
+                           e.g. one synced by Nextcloud, OneDrive, or similar. The copy is encrypted exactly \
+                           the same way as the main vault, so it's safe to back it up like this.",
+    settings_backup_folder_label: "Backup folder:",
+    settings_backup_folder_none: "(not set)",
+    btn_choose_backup_folder: "Choose folder...",
+    btn_clear_backup_folder: "Turn off backup",
 
     lock_unlock_prompt: "Enter the vault's main password:",
     lock_create_prompt: "The vault doesn't exist yet – set a main password:",

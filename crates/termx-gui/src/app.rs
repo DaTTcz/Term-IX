@@ -100,6 +100,13 @@ pub struct AppSettings {
     /// pro stare ulozene soubory bez tohoto pole.
     #[serde(default = "terminal::default_font_size")]
     pub term_font_size: f32,
+    /// Cesta ke slozce, kam se navic uklada zalozni kopie trezoru po
+    /// kazdem ulozeni (viz `MainApp::maybe_backup_vault`) - typicky
+    /// slozka synchronizovana Nextcloudem/OneDrive/... `None` (vychozi)
+    /// = zaloha vypnuta. `#[serde(default)]` kvuli zpetne kompatibilite
+    /// se starymi ulozenymi nastavenimi bez tohoto pole.
+    #[serde(default)]
+    pub backup_folder: Option<String>,
 }
 
 /// Pomocna funkce pro `#[serde(default = "default_true")]` u
@@ -118,6 +125,7 @@ impl Default for AppSettings {
             theme: theme::Theme::default(),
             sidebar_visible: true,
             term_font_size: terminal::default_font_size(),
+            backup_folder: None,
         }
     }
 }
@@ -952,6 +960,25 @@ impl MainApp {
     fn save_vault(&mut self) {
         if let Err(e) = self.vault.save(&self.master_password) {
             self.status_message = Some(format!("{}: {e}", i18n::t(self.settings.lang).vault_save_failed));
+            return;
+        }
+        self.maybe_backup_vault();
+    }
+
+    /// Po kazdem uspesnem `vault.save`/zmene hesla navic zkopiruje
+    /// aktualni (uz ulozeny) soubor trezoru do `settings.backup_folder`,
+    /// pokud je nastavena (viz sekce "Zaloha trezoru" v Nastaveni a
+    /// pozadavek "umoznili nastavit cestu pro automaticke ukladani
+    /// kopie trezoru do slozky pri zmene"). Chyba zalohy (napr. slozka
+    /// uz neexistuje - odpojeny Nextcloud disk) se jen zobrazi ve
+    /// `status_message`, NIKDY nesmi zpusobit, ze se neulozi hlavni
+    /// trezor - proto se vola az PO uspesnem hlavnim ulozeni, samostatne.
+    fn maybe_backup_vault(&mut self) {
+        let Some(dir) = self.settings.backup_folder.as_ref().filter(|p| !p.is_empty()) else {
+            return;
+        };
+        if let Err(e) = self.vault.backup_to(dir) {
+            self.status_message = Some(format!("{}: {e}", i18n::t(self.settings.lang).vault_backup_failed));
         }
     }
 
@@ -1845,6 +1872,11 @@ impl MainApp {
             ui.add_space(18.0);
             ui.separator();
             ui.add_space(12.0);
+            self.render_backup_section(ui);
+
+            ui.add_space(18.0);
+            ui.separator();
+            ui.add_space(12.0);
             self.render_change_password_section(ui);
         }
 
@@ -2550,6 +2582,58 @@ impl MainApp {
     /// od te chvile drzet v pameti uz jen to nove - stare heslo se
     /// overuje porovnanim s tim, ktere uz mame od odemceni v pameti
     /// (zadny dalsi pristup na disk neni potreba).
+    /// Sekce "Zaloha trezoru" v Nastaveni - viz pozadavek "umoznili
+    /// nastavit cestu pro automaticke ukladani kopie trezoru do slozky
+    /// pri zmene (pro ukladani v synchronizovanych slozkach)". Slozku
+    /// vybira nativni dialog (`rfd::FileDialog::pick_folder`), samotne
+    /// kopirovani pri kazdem ulozeni resi `MainApp::maybe_backup_vault`
+    /// (`Vault::backup_to`).
+    fn render_backup_section(&mut self, ui: &mut egui::Ui) {
+        let tr = i18n::t(self.settings.lang);
+        ui.heading(tr.settings_backup_heading);
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(tr.settings_backup_note).small());
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(tr.settings_backup_folder_label);
+            match &self.settings.backup_folder {
+                Some(dir) if !dir.is_empty() => {
+                    ui.code(dir.as_str());
+                }
+                _ => {
+                    ui.label(egui::RichText::new(tr.settings_backup_folder_none).italics());
+                }
+            }
+        });
+        ui.add_space(4.0);
+        let mut choose = false;
+        let mut clear = false;
+        ui.horizontal(|ui| {
+            if ui.button(tr.btn_choose_backup_folder).clicked() {
+                choose = true;
+            }
+            if self.settings.backup_folder.as_ref().is_some_and(|d| !d.is_empty())
+                && ui.button(tr.btn_clear_backup_folder).clicked()
+            {
+                clear = true;
+            }
+        });
+        // Nativni dialog (`rfd`) je blokujici volani - stejny vzor jako
+        // "Prochazet..." u exportu/importu vyse (az po vykresleni
+        // tohoto snimku, ne primo v `.clicked()` uzavreni).
+        if choose {
+            if let Some(dir) = rfd::FileDialog::new().set_title(tr.settings_backup_folder_label).pick_folder() {
+                self.settings.backup_folder = Some(dir.display().to_string());
+                // Rovnou zkusit zalohu i ted, at uzivatel hned vidi, ze
+                // to funguje (nemusi cekat na dalsi zmenu v trezoru).
+                self.maybe_backup_vault();
+            }
+        }
+        if clear {
+            self.settings.backup_folder = None;
+        }
+    }
+
     fn render_change_password_section(&mut self, ui: &mut egui::Ui) {
         let tr = i18n::t(self.settings.lang);
         let mut confirmed = false;
@@ -2601,6 +2685,7 @@ impl MainApp {
                 self.master_password = self.change_password_form.new1.clone();
                 self.status_message = Some(tr.vault_password_changed.to_string());
                 self.change_password_form = ChangePasswordDialog::default();
+                self.maybe_backup_vault();
             }
             Err(e) => {
                 self.change_password_form.error = Some(format!("{}: {e}", tr.vault_save_failed));

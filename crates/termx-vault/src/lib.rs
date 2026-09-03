@@ -136,4 +136,25 @@ impl Vault {
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
+
+    /// Zkopiruje AKTUALNI (uz na disku ulozeny, sifrovany) soubor
+    /// trezoru navic do `dir` - pouziva se pro automatickou zalohu
+    /// (viz `AppSettings::backup_folder` v `termx-gui`, sekce "Zaloha
+    /// trezoru" v Nastaveni) do slozky, kterou si uzivatel sam
+    /// synchronizuje (Nextcloud/OneDrive/...). Zamerne jen `fs::copy`
+    /// existujiciho souboru, ne znovu-sifrovani `self.data` - kopie tak
+    /// zustava bit-presne stejna jako hlavni trezor (stejne heslo,
+    /// stejny format) a zadne dalsi heslo pro ni neni potreba pamatovat.
+    /// U trezoru z [`Vault::in_memory`] (hostovsky rezim, zadny soubor
+    /// na disku) je to no-op ze stejneho duvodu jako u [`Vault::save`].
+    pub fn backup_to(&self, dir: impl AsRef<std::path::Path>) -> Result<()> {
+        if self.is_in_memory() {
+            return Ok(());
+        }
+        let dir = dir.as_ref();
+        std::fs::create_dir_all(dir)?;
+        let file_name = self.path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("trezor.termx"));
+        std::fs::copy(&self.path, dir.join(file_name))?;
+        Ok(())
+    }
 }
