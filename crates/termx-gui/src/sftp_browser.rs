@@ -1,11 +1,13 @@
 //! sftp_browser.rs - obsah "Sftp" tabu (viz `app.rs::TabKind::Sftp`):
 //! jednoduchy prohlizec vzdalenych souboru napojeny na
-//! `termx_ssh::spawn_sftp_session` - navigace slozkami, stazeni souboru
-//! (nativni "Uložit jako..." dialog), nahrani souboru (nativni
-//! "Otevřít..." dialog) do aktualni slozky. Zamerne BEZ prejmenovani/
-//! mazani/vytvareni slozek v teto prvni verzi (uzivatelsky pozadavek byl
-//! "procházet soubory a stahovat a nahrávat na něj") - da se doplnit
-//! pozdeji, az zakladni pripojeni overi skutecny build.
+//! `termx_ssh::spawn_sftp_session` - navigace slozkami, stazeni/nahrani
+//! jednotlivych souboru i CELYCH slozek rekurzivne (nativni "Uložit
+//! jako.../Otevřít.../Vybrat složku..." dialogy). Prubeh hromadneho
+//! prenosu slozky se ukazuje jen jako "hotovo/celkem" (bez bajtoveho
+//! progressu jednotlivych souboru) a existujici soubory se pri kolizi
+//! jmen VZDY prepisuji - obojí vedomé zjednodušení pro první verzi.
+//! Zamerne porad BEZ prejmenovani/mazani/vytvareni prazdnych slozek -
+//! da se doplnit pozdeji.
 //!
 //! Stejny vzor jako `terminal::TerminalSession`: spojeni se zaklada
 //! rovnou v [`SftpBrowser::new`] (vlastni vlakno, viz
@@ -40,6 +42,8 @@ enum StatusMsg {
     Error(String),
     Downloaded { remote: String, local: PathBuf },
     Uploaded { local: PathBuf, remote: String },
+    DirDownloaded { remote: String, local: PathBuf, count: usize },
+    DirUploaded { local: PathBuf, remote: String, count: usize },
 }
 
 pub struct SftpBrowser {
@@ -48,6 +52,9 @@ pub struct SftpBrowser {
     current_path: String,
     entries: Vec<SftpEntry>,
     status: Option<StatusMsg>,
+    /// Prubeh prave beziciho hromadneho prenosu slozky (done, total) -
+    /// viz `SftpEvent::DirProgress`. `None`, kdyz zadny neprobiha.
+    progress: Option<(usize, usize)>,
     cred_username: String,
     cred_password: String,
 }
@@ -60,6 +67,7 @@ impl SftpBrowser {
             current_path: String::new(),
             entries: Vec::new(),
             status: None,
+            progress: None,
             cred_username: session_username(session),
             cred_password: String::new(),
         }
@@ -100,6 +108,20 @@ impl SftpBrowser {
                     // at je novy soubor hned videt v seznamu.
                     self.request_list(self.current_path.clone());
                 }
+                Ok(SftpEvent::DirProgress { done, total }) => {
+                    self.progress = Some((done, total));
+                }
+                Ok(SftpEvent::DirDownloaded { remote, local, count }) => {
+                    self.progress = None;
+                    self.status = Some(StatusMsg::DirDownloaded { remote, local, count });
+                }
+                Ok(SftpEvent::DirUploaded { local, remote, count }) => {
+                    self.progress = None;
+                    self.status = Some(StatusMsg::DirUploaded { local, remote, count });
+                    // Stejne jako po jednotlivem nahrani - rovnou
+                    // obnovit vypis, at je nova slozka hned videt.
+                    self.request_list(self.current_path.clone());
+                }
                 Ok(SftpEvent::Closed) => {
                     if self.state != SftpState::AwaitingCredentials {
                         self.state = SftpState::Disconnected;
@@ -117,7 +139,8 @@ impl SftpBrowser {
 
     /// Prelozi `self.status` (surova data, viz [`StatusMsg`]) do textu v
     /// aktualnim jazyce - volano az tady, ne uvnitr `pump`.
-    fn status_text(&self, tr: &'static i18n::Strings) -> Option<String> {
+    fn status_text(&self, lang: Lang) -> Option<String> {
+        let tr = i18n::t(lang);
         match self.status.as_ref()? {
             StatusMsg::Error(e) => Some(e.clone()),
             StatusMsg::Downloaded { remote, local } => {
@@ -126,13 +149,19 @@ impl SftpBrowser {
             StatusMsg::Uploaded { local, remote } => {
                 Some(format!("{}: {} → {}", tr.sftp_status_uploaded, local.display(), remote))
             }
+            StatusMsg::DirDownloaded { remote, local, count } => {
+                Some(i18n::sftp_dir_downloaded(lang, *count, remote, &local.display().to_string()))
+            }
+            StatusMsg::DirUploaded { local, remote, count } => {
+                Some(i18n::sftp_dir_uploaded(lang, *count, &local.display().to_string(), remote))
+            }
         }
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, lang: Lang) {
         self.pump();
         let tr = i18n::t(lang);
-        let status_text = self.status_text(tr);
+        let status_text = self.status_text(lang);
 
         match self.state {
             SftpState::Connecting => {
@@ -177,6 +206,7 @@ impl SftpBrowser {
 
         let mut navigate_to: Option<String> = None;
         let mut download_name: Option<String> = None;
+        let mut download_dir_name: Option<String> = None;
 
         ui.horizontal(|ui| {
             let parent = parent_path(&self.current_path);
@@ -195,10 +225,22 @@ impl SftpBrowser {
                     }
                 }
             }
+            if ui.button(tr.btn_sftp_upload_folder).clicked() {
+                if let Some(local) = rfd::FileDialog::new().pick_folder() {
+                    let folder_name = local.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    if !folder_name.is_empty() {
+                        let remote = join_remote(&self.current_path, &folder_name);
+                        let _ = self.handle.cmd_tx.send(SftpCommand::UploadDir { local, remote });
+                    }
+                }
+            }
         });
         ui.add_space(4.0);
         ui.label(egui::RichText::new(&self.current_path).monospace());
-        if let Some(status) = &status_text {
+        if let Some((done, total)) = self.progress {
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(format!("{}: {done}/{total}", tr.sftp_transferring)).small());
+        } else if let Some(status) = &status_text {
             ui.add_space(2.0);
             ui.label(egui::RichText::new(status).small());
         }
@@ -217,6 +259,13 @@ impl SftpBrowser {
                         let label = format!("{}/", entry.name);
                         if ui.selectable_label(false, label).double_clicked() {
                             navigate_to = Some(join_remote(&self.current_path, &entry.name));
+                        }
+                        // Stejne tlacitko "Stáhnout" jako u souboru nize -
+                        // stahne CELOU slozku rekurzivne (viz
+                        // `SftpCommand::DownloadDir`), bez nutnosti do ni
+                        // napred navigovat.
+                        if ui.small_button(tr.btn_sftp_download).clicked() {
+                            download_dir_name = Some(entry.name.clone());
                         }
                     } else {
                         ui.label(&entry.name);
@@ -240,6 +289,17 @@ impl SftpBrowser {
             if let Some(local) = rfd::FileDialog::new().set_file_name(&name).save_file() {
                 let remote = join_remote(&self.current_path, &name);
                 let _ = self.handle.cmd_tx.send(SftpCommand::Download { remote, local });
+            }
+        }
+        if let Some(name) = download_dir_name {
+            // Uzivatel vybira RODICOVSKOU slozku - stahovana slozka se
+            // v ni vytvori jako podslozka se svym puvodnim jmenem
+            // (stejna konvence jako WinSCP/FileZilla), ne primo obsah
+            // vybrane slozky bez obalu.
+            if let Some(parent) = rfd::FileDialog::new().pick_folder() {
+                let remote = join_remote(&self.current_path, &name);
+                let local = parent.join(&name);
+                let _ = self.handle.cmd_tx.send(SftpCommand::DownloadDir { remote, local });
             }
         }
     }

@@ -170,6 +170,8 @@ pub struct Strings {
     pub btn_sftp_up: &'static str,
     pub btn_refresh: &'static str,
     pub btn_sftp_upload: &'static str,
+    pub btn_sftp_upload_folder: &'static str,
+    pub sftp_transferring: &'static str,
     pub btn_sftp_download: &'static str,
     /// Tooltip ikonky "‖" v `tab_bar` pro oznaceni tabu do rozdeleneho
     /// zobrazeni (viz `MainApp::split_marks`/`toggle_split_mark`).
@@ -390,6 +392,8 @@ pub const CS: Strings = Strings {
     btn_sftp_up: "Nahoru",
     btn_refresh: "Obnovit",
     btn_sftp_upload: "Nahrát soubor...",
+    btn_sftp_upload_folder: "Nahrát složku...",
+    sftp_transferring: "Přenáším",
     btn_sftp_download: "Stáhnout",
     connection_gone: "Tento server už neexistuje (byl smazán nebo šlo o dočasné rychlé spojení, které skončilo se zavřením tabu).",
     btn_split_mark: "Zobrazit vedle jiného tabu (rozdělené zobrazení)",
@@ -596,6 +600,8 @@ pub const EN: Strings = Strings {
     btn_sftp_up: "Up",
     btn_refresh: "Refresh",
     btn_sftp_upload: "Upload file...",
+    btn_sftp_upload_folder: "Upload folder...",
+    sftp_transferring: "Transferring",
     btn_sftp_download: "Download",
     connection_gone: "This server no longer exists (it was deleted, or it was a temporary quick connection that ended when its tab was closed).",
     btn_split_mark: "Show side by side with another tab (split view)",
@@ -760,6 +766,42 @@ pub fn update_install_failed(lang: Lang, err: &str) -> String {
     match lang {
         Lang::Cs => format!("Aktualizaci se nepodařilo nainstalovat ({err})."),
         Lang::En => format!("Failed to install the update ({err})."),
+    }
+}
+
+/// Ceske skloneni "soubor/soubory/souboru" podle poctu (1 / 2-4 / 5+) -
+/// pouzito v `sftp_dir_downloaded`/`sftp_dir_uploaded` nize, aby
+/// hlaseni po hromadnem prenosu slozky znelo prirozene i pro male
+/// pocty souboru, ne jen napevno "souboru" pro kazde cislo.
+fn cs_souboru(n: usize) -> &'static str {
+    match n {
+        1 => "soubor",
+        2..=4 => "soubory",
+        _ => "souborů",
+    }
+}
+
+fn en_files(n: usize) -> &'static str {
+    if n == 1 {
+        "file"
+    } else {
+        "files"
+    }
+}
+
+/// Hlaseni po dokonceni [`crate::app`] hromadneho stazeni cele slozky
+/// (`SftpEvent::DirDownloaded`, viz `sftp_browser.rs`).
+pub fn sftp_dir_downloaded(lang: Lang, count: usize, remote: &str, local: &str) -> String {
+    match lang {
+        Lang::Cs => format!("staženo {count} {}: {remote} → {local}", cs_souboru(count)),
+        Lang::En => format!("downloaded {count} {}: {remote} → {local}", en_files(count)),
+    }
+}
+
+pub fn sftp_dir_uploaded(lang: Lang, count: usize, local: &str, remote: &str) -> String {
+    match lang {
+        Lang::Cs => format!("nahráno {count} {}: {local} → {remote}", cs_souboru(count)),
+        Lang::En => format!("uploaded {count} {}: {local} → {remote}", en_files(count)),
     }
 }
 

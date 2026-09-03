@@ -19,15 +19,23 @@
 //! spojeni+prihlaseni na server) - stejny kompromis, jaky bezne delaji i
 //! jina GUI (FileZilla/WinSCP/MobaXterm) mezi terminalem a SFTP panelem.
 //!
+//! Rekurzivni prenos cele slozky (`DownloadDir`/`UploadDir`) nejdriv
+//! posbira SEZNAM vsech souboru (`collect_remote_files`/`collect_local_files`,
+//! iterativne pres explicitni zasobnik slozek - ne rekurzivni `async fn`,
+//! ktera by bez `Box::pin` v Rustu nesla napsat), pak je postupne
+//! prenese jeden po druhem a po kazdem posle `SftpEvent::DirProgress`
+//! ("done/total", bez bajtoveho progressu jednotlivych velkych souboru).
+//! Existujici cilove soubory se VZDY prepisuji (zadna detekce kolizi) -
+//! vedome zjednoduseni pro prvni verzi.
+//!
 //! POZNAMKA K OVERENI: cely tento soubor (vc. `russh-sftp` 2.4 API -
-//! `SftpSession::new`, `read_dir`/`DirEntry`/`Metadata`, `read`/`write`)
-//! byl napsan bez moznosti `cargo build` v tomto prostredi, jen podle
-//! dokumentace (docs.rs). Napojeni `russh::Channel` -> `SftpSession`
+//! `SftpSession::new`, `read_dir`/`DirEntry`/`Metadata`, `read`/`write`/
+//! `create_dir`) byl napsan bez moznosti `cargo build` v tomto prostredi,
+//! jen podle dokumentace (docs.rs) - jedina chyba, kterou prvni skutecny
+//! build odhalil (`FileAttributes::size` je pole `Option<u64>`, ne
+//! metoda), uz je opravena. Napojeni `russh::Channel` -> `SftpSession`
 //! (`channel.request_subsystem(true, "sftp")` + `channel.into_stream()`)
-//! vychazi z oficialnich prikladu knihovny. Prvni sestaveni na
-//! uzivatelove pocitaci muze odhalit drobne nesrovnalosti v nazvech
-//! metod/typu - architektura okolo (vlakno+kanaly, `SftpCommand`/`SftpEvent`)
-//! tim dotcena neni.
+//! vychazi z oficialnich prikladu knihovny.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,6 +71,17 @@ pub enum SftpCommand {
     /// Nahrat lokalni soubor `local` na vzdalenou cestu `remote`
     /// (aktualni slozka + jmeno lokalniho souboru, sestaveno v GUI).
     Upload { local: PathBuf, remote: String },
+    /// Stahnout CELOU vzdalenou slozku `remote` (rekurzivne, vc.
+    /// podslozek) do lokalni slozky `local` (uz vc. jmena stahovane
+    /// slozky - `SftpBrowser` sklada `local` jako
+    /// `vybrany_rodic/jmeno_slozky`).
+    DownloadDir { remote: String, local: PathBuf },
+    /// Nahrat CELOU lokalni slozku `local` (rekurzivne) do vzdalene
+    /// slozky `remote` (uz vc. jmena nahravane slozky, obdoba
+    /// `DownloadDir`). Chybejici vzdalene podslozky se prubezne
+    /// vytvareji (`create_dir`) - SFTP protokol nema "mkdir -p", takze
+    /// se vytvari postupne po jednotlivych urovnich.
+    UploadDir { local: PathBuf, remote: String },
     /// Dodatecne doplnene prihlasovaci udaje po [`SftpEvent::AwaitingCredentials`] -
     /// stejny vzor jako `SshInput::Credentials` v `session.rs`.
     Credentials { username: String, password: String },
@@ -90,6 +109,18 @@ pub enum SftpEvent {
     Listing { path: String, entries: Vec<SftpEntry> },
     Downloaded { remote: String, local: PathBuf },
     Uploaded { local: PathBuf, remote: String },
+    /// Prubezny postup hromadneho prenosu slozky (`DownloadDir`/
+    /// `UploadDir`) - posila se po KAZDEM jednotlivem souboru (i po
+    /// tom, ktery selhal - viz `Error` poslane tesne pred tim), aby
+    /// `SftpBrowser` mohl zobrazit "done/total". Zamerne bez
+    /// bajtove/procentualni presnosti u jednotlivych velkych souboru -
+    /// viz rozhodnuti u zadani teto funkce.
+    DirProgress { done: usize, total: usize },
+    /// Cely rekurzivni prenos slozky dokoncen (bez ohledu na to, jestli
+    /// nektere soubory cestou selhaly - ty uz byly ohlaseny jednotlive
+    /// pres `Error`) - `count` je celkovy pocet zpracovanych souboru.
+    DirDownloaded { remote: String, local: PathBuf, count: usize },
+    DirUploaded { local: PathBuf, remote: String, count: usize },
     /// Spojeni skoncilo (chybou i cistě) - `SftpBrowser` uz na tomto
     /// handle dal nic neposila.
     Closed,
@@ -130,6 +161,78 @@ pub fn spawn_sftp_session(session: Session) -> SftpHandle {
     });
 
     SftpHandle { cmd_tx, event_rx }
+}
+
+/// Spoji absolutni cestu slozky `dir` se jmenem `name` - SFTP protokol
+/// vzdy pouziva '/' jako oddelovac, bez ohledu na OS ciloveho serveru.
+fn join_remote(dir: &str, name: &str) -> String {
+    if dir.ends_with('/') {
+        format!("{dir}{name}")
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// Rekurzivne posbira vsechny SOUBORY (ne slozky) pod `remote_root` -
+/// pro kazdy vrati (absolutni vzdalena cesta, cesta relativni k
+/// `remote_root`, pouzita pro sestaveni odpovidajici lokalni cesty pri
+/// stahovani). Iterativni (explicitni zasobnik slozek k projiti), ne
+/// rekurzivni `async fn` - ta by bez `Box::pin` v Rustu nesla napsat.
+async fn collect_remote_files(sftp: &SftpSession, remote_root: &str) -> anyhow::Result<Vec<(String, String)>> {
+    let mut files = Vec::new();
+    let mut dirs = vec![remote_root.to_string()];
+
+    while let Some(dir) = dirs.pop() {
+        let read_dir = sftp
+            .read_dir(dir.as_str())
+            .await
+            .map_err(|e| anyhow::anyhow!("nelze vypsat „{dir}“: {e}"))?;
+
+        for entry in read_dir {
+            let meta = entry.metadata();
+            let full = join_remote(&dir, &entry.file_name());
+            if meta.is_dir() {
+                dirs.push(full);
+            } else {
+                let rel = full.strip_prefix(remote_root).unwrap_or(&full).trim_start_matches('/').to_string();
+                files.push((full, rel));
+            }
+        }
+    }
+
+    Ok(files)
+}
+
+/// Lokalni obdoba `collect_remote_files` - rekurzivne posbira vsechny
+/// SOUBORY pod `local_root` (bezne synchronni `std::fs::read_dir`,
+/// zamerne bez `spawn_blocking` - jde o lokalni disk, ne sit, takze i u
+/// vetsich stromu je to v ramci tohoto jednovlaknoveho runtime
+/// prijatelne kratke zablokovani).
+fn collect_local_files(local_root: &std::path::Path) -> anyhow::Result<Vec<(PathBuf, String)>> {
+    let mut files = Vec::new();
+    let mut dirs = vec![local_root.to_path_buf()];
+
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                dirs.push(path);
+            } else if file_type.is_file() {
+                let rel = path
+                    .strip_prefix(local_root)
+                    .unwrap_or(&path)
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                files.push((path, rel));
+            }
+        }
+    }
+
+    Ok(files)
 }
 
 async fn run_sftp_session(
@@ -254,6 +357,73 @@ async fn run_sftp_session(
                 },
                 Err(e) => {
                     let _ = event_tx.send(SftpEvent::Error(format!("čtení „{}“ selhalo: {e}", local.display())));
+                }
+            },
+            SftpCommand::DownloadDir { remote, local } => match collect_remote_files(&sftp, &remote).await {
+                Ok(files) => {
+                    let total = files.len();
+                    for (idx, (remote_path, rel_path)) in files.iter().enumerate() {
+                        let mut local_path = local.clone();
+                        for part in rel_path.split('/') {
+                            local_path.push(part);
+                        }
+                        let outcome: anyhow::Result<()> = (|| {
+                            if let Some(parent) = local_path.parent() {
+                                std::fs::create_dir_all(parent)?;
+                            }
+                            Ok(())
+                        })();
+                        let outcome = match outcome {
+                            Ok(()) => match sftp.read(remote_path.as_str()).await {
+                                Ok(data) => std::fs::write(&local_path, &data).map_err(anyhow::Error::from),
+                                Err(e) => Err(anyhow::anyhow!("{e}")),
+                            },
+                            Err(e) => Err(e),
+                        };
+                        if let Err(e) = outcome {
+                            let _ = event_tx.send(SftpEvent::Error(format!("stažení „{remote_path}“ selhalo: {e}")));
+                        }
+                        let _ = event_tx.send(SftpEvent::DirProgress { done: idx + 1, total });
+                    }
+                    let _ = event_tx.send(SftpEvent::DirDownloaded { remote, local, count: total });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(SftpEvent::Error(format!("nelze projít „{remote}“: {e}")));
+                }
+            },
+            SftpCommand::UploadDir { local, remote } => match collect_local_files(&local) {
+                Ok(files) => {
+                    let total = files.len();
+                    let mut created_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    for (idx, (local_path, rel_path)) in files.iter().enumerate() {
+                        let remote_path = join_remote(&remote, rel_path);
+                        // Chybejici vzdalene podslozky prubezne vytvorit
+                        // (SFTP nema "mkdir -p") - chyby ("uz existuje")
+                        // se zamerne ignoruji, resi to `created_dirs`
+                        // hlavne kvuli tomu, aby se stejna slozka
+                        // nezkousela vytvaret znovu pro kazdy soubor v ni.
+                        if let Some(slash) = rel_path.rfind('/') {
+                            let mut acc = remote.clone();
+                            for part in rel_path[..slash].split('/') {
+                                acc = join_remote(&acc, part);
+                                if created_dirs.insert(acc.clone()) {
+                                    let _ = sftp.create_dir(acc.as_str()).await;
+                                }
+                            }
+                        }
+                        let outcome = match std::fs::read(local_path) {
+                            Ok(data) => sftp.write(remote_path.as_str(), &data).await.map_err(|e| anyhow::anyhow!("{e}")),
+                            Err(e) => Err(anyhow::anyhow!("{e}")),
+                        };
+                        if let Err(e) = outcome {
+                            let _ = event_tx.send(SftpEvent::Error(format!("nahrání „{remote_path}“ selhalo: {e}")));
+                        }
+                        let _ = event_tx.send(SftpEvent::DirProgress { done: idx + 1, total });
+                    }
+                    let _ = event_tx.send(SftpEvent::DirUploaded { local, remote, count: total });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(SftpEvent::Error(format!("nelze projít „{}“: {e}", local.display())));
                 }
             },
             // Uz autentizovano - dalsi zprava tohoto typu (nemela by
