@@ -22,6 +22,7 @@
 
 mod handler;
 mod session;
+mod sftp;
 
 use std::sync::Arc;
 
@@ -32,6 +33,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use handler::TofuHandler;
 
 pub use session::{spawn_ssh_session, SshEvent, SshHandle, SshInput, SystemStats};
+pub use sftp::{spawn_sftp_session, SftpCommand, SftpEntry, SftpEvent, SftpHandle};
 
 #[derive(Default)]
 pub struct SshModule;

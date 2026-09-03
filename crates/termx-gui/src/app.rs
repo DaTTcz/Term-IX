@@ -43,6 +43,7 @@ use termx_vault::{Vault, VaultData};
 use uuid::Uuid;
 
 use crate::i18n::{self, Lang};
+use crate::sftp_browser;
 use crate::terminal;
 use crate::theme;
 
@@ -198,6 +199,11 @@ enum TabKind {
     Home,
     Settings,
     Connection(Uuid),
+    /// SFTP prohlizec souboru (viz `sftp_browser.rs`) - druhy, nezavisly
+    /// tab ke stejne ulozene session (stejne `id` jako prislusny
+    /// `Connection(id)`, pokud je otevreny), otevirany z kontextoveho
+    /// menu stromu serveru ("Otevřít SFTP", viz `TreeAction::OpenSftp`).
+    Sftp(Uuid),
 }
 
 struct NewSessionForm {
@@ -462,6 +468,7 @@ struct ImportDialog {
 
 enum TreeAction {
     Open(Uuid),
+    OpenSftp(Uuid),
     EditSession(Uuid),
     RenameSession(Uuid),
     MoveSession(Uuid),
@@ -786,6 +793,9 @@ struct MainApp {
     /// `apply_tree_action`) - zahozenim se cistě ukonci i prislusne
     /// pozadi bezici SSH vlakno (viz `termx_ssh::spawn_ssh_session`).
     terminal_sessions: std::collections::HashMap<Uuid, terminal::TerminalSession>,
+    /// Obdoba `terminal_sessions`, ale pro otevrene "Sftp" taby (viz
+    /// `TabKind::Sftp`/`open_sftp_tab`) - klic je take id session.
+    sftp_sessions: std::collections::HashMap<Uuid, sftp_browser::SftpBrowser>,
 
     new_session_form: Option<NewSessionForm>,
     /// Editace jiz ulozeneho serveru - viz [`EditSessionForm`].
@@ -881,6 +891,7 @@ impl MainApp {
             tabs: vec![TabKind::Home],
             active_tab: 0,
             terminal_sessions: std::collections::HashMap::new(),
+            sftp_sessions: std::collections::HashMap::new(),
             new_session_form: None,
             edit_session_form: None,
             new_folder_dialog: None,
@@ -926,6 +937,7 @@ impl MainApp {
             tabs: vec![TabKind::Home],
             active_tab: 0,
             terminal_sessions: std::collections::HashMap::new(),
+            sftp_sessions: std::collections::HashMap::new(),
             new_session_form: None,
             edit_session_form: None,
             new_folder_dialog: None,
@@ -1059,6 +1071,10 @@ impl MainApp {
             TabKind::Home => tr.tab_home.to_string(),
             TabKind::Settings => tr.tab_settings.to_string(),
             TabKind::Connection(id) => self.find_session(id).map(|s| s.name.clone()).unwrap_or_else(|| tr.tab_connection_fallback.to_string()),
+            TabKind::Sftp(id) => self
+                .find_session(id)
+                .map(|s| format!("{} ({})", s.name, tr.tab_sftp_suffix))
+                .unwrap_or_else(|| tr.tab_connection_fallback.to_string()),
         }
     }
 
@@ -1068,6 +1084,18 @@ impl MainApp {
             return;
         }
         self.tabs.push(TabKind::Connection(id));
+        self.active_tab = self.tabs.len() - 1;
+    }
+
+    /// Otevre (nebo aktivuje jiz otevreny) "Sftp" tab pro danou session -
+    /// obdoba `open_session_tab`, ale nezavisly na tom, jestli je pro
+    /// stejne `id` zrovna otevreny i `Connection` tab.
+    fn open_sftp_tab(&mut self, id: Uuid) {
+        if let Some(idx) = self.tabs.iter().position(|t| matches!(t, TabKind::Sftp(sid) if *sid == id)) {
+            self.active_tab = idx;
+            return;
+        }
+        self.tabs.push(TabKind::Sftp(id));
         self.active_tab = self.tabs.len() - 1;
     }
 
@@ -1089,6 +1117,9 @@ impl MainApp {
         // bezici SSH vlakno - viz `termx_ssh::spawn_ssh_session`).
         if let TabKind::Connection(id) = self.tabs[idx] {
             self.terminal_sessions.remove(&id);
+        }
+        if let TabKind::Sftp(id) = self.tabs[idx] {
+            self.sftp_sessions.remove(&id);
         }
         // Zavreny tab uz nedava smysl drzet oznaceny pro rozdelene
         // zobrazeni (viz `split_marks`/`toggle_split_mark`) - jinak by po
@@ -1376,6 +1407,10 @@ impl MainApp {
             // ke kraji obsahove plochy (viz pozadavek "okno terminálu
             // bychom mohli dotáhnout až ke kraji").
             TabKind::Connection(id) => self.render_connection(ui, id, focused),
+            // SFTP prohlizec ma stejne (zadne) dodatecne odsazeni jako
+            // terminal - vlastni vnitrni rozlozeni (`sftp_browser.rs`)
+            // uz ma svuj vlastni prostor od kraje pryc.
+            TabKind::Sftp(id) => self.render_sftp(ui, id),
         }
     }
 
@@ -1992,6 +2027,36 @@ impl MainApp {
         }
     }
 
+    /// "Sftp" tab (viz `TabKind::Sftp`, `sftp_browser.rs`) - obdoba
+    /// `render_connection`, ale nezavisla na tom, jestli je pro stejne
+    /// `id` zrovna otevreny i terminal (samostatne SSH spojeni, viz
+    /// `sftp.rs`).
+    fn render_sftp(&mut self, ui: &mut egui::Ui, id: Uuid) {
+        let Some(session) = self.find_session(id).cloned() else {
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                ui.label(i18n::t(self.settings.lang).connection_gone);
+            });
+            return;
+        };
+
+        if session.protocol != Protocol::Ssh {
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                ui.heading(&session.name);
+                ui.add_space(8.0);
+                ui.label(i18n::protocol_not_supported(self.settings.lang, session.protocol));
+            });
+            return;
+        }
+
+        self.sftp_sessions.entry(id).or_insert_with(|| sftp_browser::SftpBrowser::new(&session));
+
+        if let Some(browser) = self.sftp_sessions.get_mut(&id) {
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                browser.render(ui, self.settings.lang);
+            });
+        }
+    }
+
     // -- horni menu -----------------------------------------------------
 
     fn top_menu(&mut self, ctx: &egui::Context) {
@@ -2452,8 +2517,9 @@ impl MainApp {
             match &target {
                 DeleteTarget::Session(id) => {
                     self.vault.data.servers.retain(|s| s.id != *id);
-                    self.tabs.retain(|t| !matches!(t, TabKind::Connection(sid) if sid == id));
+                    self.tabs.retain(|t| !matches!(t, TabKind::Connection(sid) if sid == id) && !matches!(t, TabKind::Sftp(sid) if sid == id));
                     self.terminal_sessions.remove(id);
+                    self.sftp_sessions.remove(id);
                     if self.active_tab >= self.tabs.len() {
                         self.active_tab = self.tabs.len().saturating_sub(1);
                     }
@@ -3248,6 +3314,10 @@ impl MainApp {
                 actions.push(TreeAction::Open(id));
                 ui.close_menu();
             }
+            if ui.button(tr.btn_open_sftp).clicked() {
+                actions.push(TreeAction::OpenSftp(id));
+                ui.close_menu();
+            }
             if ui.button(tr.btn_edit).clicked() {
                 actions.push(TreeAction::EditSession(id));
                 ui.close_menu();
@@ -3270,6 +3340,7 @@ impl MainApp {
     fn apply_tree_action(&mut self, action: TreeAction) {
         match action {
             TreeAction::Open(id) => self.open_session_tab(id),
+            TreeAction::OpenSftp(id) => self.open_sftp_tab(id),
             TreeAction::EditSession(id) => {
                 if let Some(session) = self.vault.data.servers.iter().find(|s| s.id == id) {
                     let form = EditSessionForm::from_session(session);

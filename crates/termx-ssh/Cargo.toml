@@ -16,3 +16,8 @@ async-trait = "0.1"
 crossterm = "0.28"
 russh = "0.44"
 russh-keys = "0.44"
+# SFTP prohlizec souboru pro Connection tab (viz `sftp.rs`) - napojuje se
+# primo na jiz existujici `russh::client::Handle` (dalsi kanal se
+# subsystemem "sftp", ne nova zavislost na konkretni verzi russh - dev-
+# dependencies russh-sftp samotneho jsou jen pro jeho vlastni priklady/testy).
+russh-sftp = "2.4"

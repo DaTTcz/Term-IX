@@ -29,6 +29,7 @@
 
 mod app;
 mod i18n;
+mod sftp_browser;
 mod terminal;
 mod theme;
 
