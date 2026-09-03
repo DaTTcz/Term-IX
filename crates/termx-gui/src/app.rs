@@ -1741,7 +1741,25 @@ impl MainApp {
                 // hned vedle.
                 let release_url = latest.url.clone();
                 ui.colored_label(egui::Color32::from_rgb(0xe6, 0xc2, 0x5a), i18n::update_available(self.settings.lang, &latest.version));
+                // `ui.horizontal` (na rozdil od jednotlivych widgetu jako
+                // `ui.button`/`ui.label` vyse) neni uvnitr `vertical_centered`
+                // (viz `render_home`) "center-aware" - vzdy si zabere celou
+                // dostupnou sirku a zacne vlevo, takze tenhle radek dvou
+                // tlacitek vychazel pribity k levemu okraji Home tabu
+                // (zpetna vazba "tlačitka vystředíme"). Stejny druh problemu
+                // uz resi komentar u `HOME_FORM_WIDTH` vyse pro `egui::Grid` -
+                // rucni oprava je tu ale jednodussi, protoze tlacitka (na
+                // rozdil od Gridu s roztahujicimi se textovymi poli) uz sama
+                // o sobe nezabiraji vic mista, nez kolik potrebuje jejich
+                // text - staci tedy jen odhadnuta sirka celeho radku (s
+                // rezervou pro delsi CS/EN texty) pro vypocet mezery vlevo,
+                // zadne dalsi omezeni sirky uvnitr netreba.
+                const UPDATE_BUTTONS_WIDTH: f32 = 300.0;
+                let avail = ui.available_width();
                 ui.horizontal(|ui| {
+                    if avail > UPDATE_BUTTONS_WIDTH {
+                        ui.add_space((avail - UPDATE_BUTTONS_WIDTH) / 2.0);
+                    }
                     if ui.button(tr.btn_update_now).clicked() {
                         self.start_update_install();
                     }
