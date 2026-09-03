@@ -216,7 +216,7 @@ async fn run_sftp_session(
                             SftpEntry {
                                 name: entry.file_name(),
                                 is_dir: meta.is_dir(),
-                                size: meta.size(),
+                                size: meta.size.unwrap_or(0),
                             }
                         })
                         .collect();
