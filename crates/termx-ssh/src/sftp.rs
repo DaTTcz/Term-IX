@@ -82,6 +82,19 @@ pub enum SftpCommand {
     /// vytvareji (`create_dir`) - SFTP protokol nema "mkdir -p", takze
     /// se vytvari postupne po jednotlivych urovnich.
     UploadDir { local: PathBuf, remote: String },
+    /// Prejmenovat/presunout `from` (absolutni cesta) na `to` (absolutni
+    /// cesta) - pouzito jen pro prejmenovani v RAMCI stejne slozky
+    /// (`SftpBrowser` sklada `to` jako puvodni_slozka/novy_nazev), ale
+    /// SFTP `rename` samo o sobe umi i presun mezi slozkami.
+    Rename { from: String, to: String },
+    /// Smazat soubor (`is_dir == false`) nebo PRAZDNOU slozku
+    /// (`is_dir == true`) na dane absolutni ceste - SFTP protokol (stejne
+    /// jako POSIX `rmdir`) neumi smazat neprazdnou slozku rekurzivne,
+    /// takova operace jen skonci chybou (`SftpEvent::Error`), zadne
+    /// specialni osetreni tu neni potreba.
+    Delete { path: String, is_dir: bool },
+    /// Vytvorit novou PRAZDNOU slozku na dane absolutni ceste.
+    Mkdir { path: String },
     /// Dodatecne doplnene prihlasovaci udaje po [`SftpEvent::AwaitingCredentials`] -
     /// stejny vzor jako `SshInput::Credentials` v `session.rs`.
     Credentials { username: String, password: String },
@@ -121,6 +134,12 @@ pub enum SftpEvent {
     /// pres `Error`) - `count` je celkovy pocet zpracovanych souboru.
     DirDownloaded { remote: String, local: PathBuf, count: usize },
     DirUploaded { local: PathBuf, remote: String, count: usize },
+    /// Odpoved na [`SftpCommand::Rename`].
+    Renamed { from: String, to: String },
+    /// Odpoved na [`SftpCommand::Delete`].
+    Deleted { path: String },
+    /// Odpoved na [`SftpCommand::Mkdir`].
+    Created { path: String },
     /// Spojeni skoncilo (chybou i cistě) - `SftpBrowser` uz na tomto
     /// handle dal nic neposila.
     Closed,
@@ -455,6 +474,34 @@ async fn run_sftp_session(
                 }
                 Err(e) => {
                     let _ = event_tx.send(SftpEvent::Error(format!("nelze projít „{}“: {e}", local.display())));
+                }
+            },
+            SftpCommand::Rename { from, to } => match sftp.rename(from.as_str(), to.as_str()).await {
+                Ok(()) => {
+                    let _ = event_tx.send(SftpEvent::Renamed { from, to });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(SftpEvent::Error(format!("přejmenování selhalo: {e}")));
+                }
+            },
+            SftpCommand::Delete { path, is_dir } => {
+                let result =
+                    if is_dir { sftp.remove_dir(path.as_str()).await } else { sftp.remove_file(path.as_str()).await };
+                match result {
+                    Ok(()) => {
+                        let _ = event_tx.send(SftpEvent::Deleted { path });
+                    }
+                    Err(e) => {
+                        let _ = event_tx.send(SftpEvent::Error(format!("smazání „{path}“ selhalo: {e}")));
+                    }
+                }
+            }
+            SftpCommand::Mkdir { path } => match sftp.create_dir(path.as_str()).await {
+                Ok(()) => {
+                    let _ = event_tx.send(SftpEvent::Created { path });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(SftpEvent::Error(format!("vytvoření složky „{path}“ selhalo: {e}")));
                 }
             },
             // Uz autentizovano - dalsi zprava tohoto typu (nemela by

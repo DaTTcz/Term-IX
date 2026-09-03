@@ -6,8 +6,9 @@
 //! prenosu slozky se ukazuje jen jako "hotovo/celkem" (bez bajtoveho
 //! progressu jednotlivych souboru) a existujici soubory se pri kolizi
 //! jmen VZDY prepisuji - obojí vedomé zjednodušení pro první verzi.
-//! Zamerne porad BEZ prejmenovani/mazani/vytvareni prazdnych slozek -
-//! da se doplnit pozdeji.
+//! Umi i prejmenovani, mazani (jen souboru/PRAZDNYCH slozek - SFTP samo
+//! neumi rekurzivni smazani neprazdne slozky) a vytvoreni nove prazdne
+//! slozky.
 //!
 //! Stejny vzor jako `terminal::TerminalSession`: spojeni se zaklada
 //! rovnou v [`SftpBrowser::new`] (vlastni vlakno, viz
@@ -44,6 +45,9 @@ enum StatusMsg {
     Uploaded { local: PathBuf, remote: String },
     DirDownloaded { remote: String, local: PathBuf, count: usize },
     DirUploaded { local: PathBuf, remote: String, count: usize },
+    Renamed { from: String, to: String },
+    Deleted { path: String },
+    Created { path: String },
 }
 
 pub struct SftpBrowser {
@@ -60,6 +64,13 @@ pub struct SftpBrowser {
     /// cesty, at je jasne, ze se na klik/navigaci neco deje (predtim
     /// pri pomalejsim spojeni chvili vypadalo, ze se nestalo nic).
     loading: bool,
+    /// "Nová složka..." dialog - `Some(rozepsany_nazev)` kdyz je
+    /// otevreny, `None` kdyz zavreny. Viz `render` (blok na konci).
+    mkdir_input: Option<String>,
+    /// "Přejmenovat" dialog - `Some((puvodni_nazev, rozepsany_novy_nazev))`.
+    rename_input: Option<(String, String)>,
+    /// Potvrzeni mazani - `Some((absolutni_cesta, je_slozka, zobrazovany_nazev))`.
+    delete_confirm: Option<(String, bool, String)>,
     cred_username: String,
     cred_password: String,
 }
@@ -74,6 +85,9 @@ impl SftpBrowser {
             status: None,
             progress: None,
             loading: false,
+            mkdir_input: None,
+            rename_input: None,
+            delete_confirm: None,
             cred_username: session_username(session),
             cred_password: String::new(),
         }
@@ -130,6 +144,18 @@ impl SftpBrowser {
                     // obnovit vypis, at je nova slozka hned videt.
                     self.request_list(self.current_path.clone());
                 }
+                Ok(SftpEvent::Renamed { from, to }) => {
+                    self.status = Some(StatusMsg::Renamed { from, to });
+                    self.request_list(self.current_path.clone());
+                }
+                Ok(SftpEvent::Deleted { path }) => {
+                    self.status = Some(StatusMsg::Deleted { path });
+                    self.request_list(self.current_path.clone());
+                }
+                Ok(SftpEvent::Created { path }) => {
+                    self.status = Some(StatusMsg::Created { path });
+                    self.request_list(self.current_path.clone());
+                }
                 Ok(SftpEvent::Closed) => {
                     if self.state != SftpState::AwaitingCredentials {
                         self.state = SftpState::Disconnected;
@@ -165,6 +191,9 @@ impl SftpBrowser {
             StatusMsg::DirUploaded { local, remote, count } => {
                 Some(i18n::sftp_dir_uploaded(lang, *count, &local.display().to_string(), remote))
             }
+            StatusMsg::Renamed { from, to } => Some(format!("{}: {} → {}", tr.sftp_status_renamed, from, to)),
+            StatusMsg::Deleted { path } => Some(format!("{}: {}", tr.sftp_status_deleted, path)),
+            StatusMsg::Created { path } => Some(format!("{}: {}", tr.sftp_status_created, path)),
         }
     }
 
@@ -217,6 +246,8 @@ impl SftpBrowser {
         let mut navigate_to: Option<String> = None;
         let mut download_name: Option<String> = None;
         let mut download_dir_name: Option<String> = None;
+        let mut rename_click: Option<String> = None;
+        let mut delete_click: Option<(String, bool)> = None;
 
         ui.horizontal(|ui| {
             let parent = parent_path(&self.current_path);
@@ -243,6 +274,9 @@ impl SftpBrowser {
                         let _ = self.handle.cmd_tx.send(SftpCommand::UploadDir { local, remote });
                     }
                 }
+            }
+            if ui.button(tr.btn_sftp_mkdir).clicked() {
+                self.mkdir_input = Some(String::new());
             }
         });
         ui.add_space(4.0);
@@ -301,12 +335,24 @@ impl SftpBrowser {
                         if ui.small_button(tr.btn_sftp_download).clicked() {
                             download_dir_name = Some(entry.name.clone());
                         }
+                        if ui.small_button(tr.btn_rename).clicked() {
+                            rename_click = Some(entry.name.clone());
+                        }
+                        if ui.small_button(tr.btn_delete).clicked() {
+                            delete_click = Some((entry.name.clone(), true));
+                        }
                     } else {
                         ui.label(&entry.name);
                         ui.add_space(6.0);
                         ui.label(egui::RichText::new(format_size(entry.size)).weak());
                         if ui.small_button(tr.btn_sftp_download).clicked() {
                             download_name = Some(entry.name.clone());
+                        }
+                        if ui.small_button(tr.btn_rename).clicked() {
+                            rename_click = Some(entry.name.clone());
+                        }
+                        if ui.small_button(tr.btn_delete).clicked() {
+                            delete_click = Some((entry.name.clone(), false));
                         }
                     }
                 });
@@ -335,6 +381,146 @@ impl SftpBrowser {
                 let local = parent.join(&name);
                 let _ = self.handle.cmd_tx.send(SftpCommand::DownloadDir { remote, local });
             }
+        }
+        if let Some(name) = rename_click {
+            self.rename_input = Some((name.clone(), name));
+        }
+        if let Some((name, is_dir)) = delete_click {
+            let path = join_remote(&self.current_path, &name);
+            self.delete_confirm = Some((path, is_dir, name));
+        }
+
+        self.render_mkdir_dialog(ui, tr);
+        self.render_rename_dialog(ui, tr);
+        self.render_delete_dialog(ui, lang, tr);
+    }
+
+    /// "Nová složka..." modal - stejny vzor "take/show/pripadne vratit
+    /// zpet", jaky uz `app.rs` pouziva pro sve dialogy (`show_new_session_dialog`
+    /// apod.) - nejde jednoduse pujcit `&mut self.mkdir_input` primo do
+    /// uzavreni `egui::Window::show`, protoze uvnitr `if submit {...}`
+    /// nize je potreba `self.mkdir_input` znovu zapsat/vynulovat, coz
+    /// by kolidovalo s jeste zivou pujckou.
+    fn render_mkdir_dialog(&mut self, ui: &mut egui::Ui, tr: &i18n::Strings) {
+        let Some(mut name) = self.mkdir_input.take() else { return };
+        let mut open = true;
+        let mut submit = false;
+        let mut cancel = false;
+
+        egui::Window::new(tr.dialog_sftp_mkdir_title)
+            .collapsible(false)
+            .resizable(false)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .current_pos(ui.ctx().screen_rect().center())
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                ui.label(tr.field_name);
+                ui.text_edit_singleline(&mut name);
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr.btn_sftp_create).clicked() {
+                        submit = true;
+                    }
+                    if ui.button(tr.btn_cancel).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if cancel {
+            open = false;
+        }
+
+        if submit {
+            let trimmed = name.trim().to_string();
+            if !trimmed.is_empty() {
+                let path = join_remote(&self.current_path, &trimmed);
+                let _ = self.handle.cmd_tx.send(SftpCommand::Mkdir { path });
+            }
+        } else if open {
+            self.mkdir_input = Some(name);
+        }
+    }
+
+    /// "Přejmenovat" modal - viz `render_mkdir_dialog` pro vysvetleni
+    /// take/show/pripadne-vratit vzoru.
+    fn render_rename_dialog(&mut self, ui: &mut egui::Ui, tr: &i18n::Strings) {
+        let Some((old_name, mut new_name)) = self.rename_input.take() else { return };
+        let mut open = true;
+        let mut submit = false;
+        let mut cancel = false;
+
+        egui::Window::new(tr.dialog_rename_title)
+            .collapsible(false)
+            .resizable(false)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .current_pos(ui.ctx().screen_rect().center())
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                ui.label(tr.field_name);
+                ui.text_edit_singleline(&mut new_name);
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr.btn_save).clicked() {
+                        submit = true;
+                    }
+                    if ui.button(tr.btn_cancel).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if cancel {
+            open = false;
+        }
+
+        if submit {
+            let trimmed = new_name.trim().to_string();
+            if !trimmed.is_empty() && trimmed != old_name {
+                let from = join_remote(&self.current_path, &old_name);
+                let to = join_remote(&self.current_path, &trimmed);
+                let _ = self.handle.cmd_tx.send(SftpCommand::Rename { from, to });
+            }
+        } else if open {
+            self.rename_input = Some((old_name, new_name));
+        }
+    }
+
+    /// Potvrzeni smazani - viz `render_mkdir_dialog` pro vysvetleni
+    /// take/show/pripadne-vratit vzoru.
+    fn render_delete_dialog(&mut self, ui: &mut egui::Ui, lang: Lang, tr: &i18n::Strings) {
+        let Some((path, is_dir, name)) = self.delete_confirm.take() else { return };
+        let mut open = true;
+        let mut confirmed = false;
+        let mut cancel = false;
+
+        egui::Window::new(tr.dialog_delete_title)
+            .collapsible(false)
+            .resizable(false)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .current_pos(ui.ctx().screen_rect().center())
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                ui.label(i18n::confirm_delete_sftp_entry(lang, &name));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr.btn_delete).clicked() {
+                        confirmed = true;
+                    }
+                    if ui.button(tr.btn_cancel).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if cancel {
+            open = false;
+        }
+
+        if confirmed {
+            let _ = self.handle.cmd_tx.send(SftpCommand::Delete { path, is_dir });
+        } else if open {
+            self.delete_confirm = Some((path, is_dir, name));
         }
     }
 }

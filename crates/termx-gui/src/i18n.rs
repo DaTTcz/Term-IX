@@ -182,6 +182,12 @@ pub struct Strings {
     pub sftp_transferring: &'static str,
     pub sftp_loading: &'static str,
     pub btn_sftp_download: &'static str,
+    pub btn_sftp_mkdir: &'static str,
+    pub btn_sftp_create: &'static str,
+    pub dialog_sftp_mkdir_title: &'static str,
+    pub sftp_status_renamed: &'static str,
+    pub sftp_status_deleted: &'static str,
+    pub sftp_status_created: &'static str,
     /// Tooltip ikonky "‖" v `tab_bar` pro oznaceni tabu do rozdeleneho
     /// zobrazeni (viz `MainApp::split_marks`/`toggle_split_mark`).
     pub btn_split_mark: &'static str,
@@ -411,6 +417,12 @@ pub const CS: Strings = Strings {
     sftp_transferring: "Přenáším",
     sftp_loading: "Načítám…",
     btn_sftp_download: "Stáhnout",
+    btn_sftp_mkdir: "Nová složka...",
+    btn_sftp_create: "Vytvořit",
+    dialog_sftp_mkdir_title: "Nová složka",
+    sftp_status_renamed: "přejmenováno",
+    sftp_status_deleted: "smazáno",
+    sftp_status_created: "vytvořena složka",
     connection_gone: "Tento server už neexistuje (byl smazán nebo šlo o dočasné rychlé spojení, které skončilo se zavřením tabu).",
     btn_split_mark: "Zobrazit vedle jiného tabu (rozdělené zobrazení)",
     btn_split_unmark: "Zrušit rozdělené zobrazení",
@@ -626,6 +638,12 @@ pub const EN: Strings = Strings {
     sftp_transferring: "Transferring",
     sftp_loading: "Loading…",
     btn_sftp_download: "Download",
+    btn_sftp_mkdir: "New folder...",
+    btn_sftp_create: "Create",
+    dialog_sftp_mkdir_title: "New folder",
+    sftp_status_renamed: "renamed",
+    sftp_status_deleted: "deleted",
+    sftp_status_created: "folder created",
     connection_gone: "This server no longer exists (it was deleted, or it was a temporary quick connection that ended when its tab was closed).",
     btn_split_mark: "Show side by side with another tab (split view)",
     btn_split_unmark: "Turn off split view",
@@ -846,6 +864,13 @@ pub fn confirm_delete_folder(lang: Lang, path: &str) -> String {
     match lang {
         Lang::Cs => format!("Opravdu smazat prázdnou složku „{path}“?"),
         Lang::En => format!("Are you sure you want to delete the empty folder “{path}”?"),
+    }
+}
+
+pub fn confirm_delete_sftp_entry(lang: Lang, name: &str) -> String {
+    match lang {
+        Lang::Cs => format!("Opravdu smazat „{name}“ na serveru? Tuto akci nelze vrátit zpět."),
+        Lang::En => format!("Are you sure you want to delete “{name}” on the server? This action cannot be undone."),
     }
 }
 
