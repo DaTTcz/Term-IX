@@ -1205,7 +1205,16 @@ impl MainApp {
                     TabKind::Connection(id) => self.terminal_sessions.get(&id).map(|s| s.state()),
                     _ => None,
                 };
-                let is_dead = conn_state == Some(terminal::ConnState::Disconnected);
+                // Obdoba `conn_state`, ale pro "Sftp" taby (jiny typ
+                // stavu - `sftp_browser::SftpState` - nez terminaloveho
+                // `ConnState`, proto samostatna promenna misto spolecneho
+                // `Option<...>`).
+                let sftp_state = match kind {
+                    TabKind::Sftp(id) => self.sftp_sessions.get(&id).map(|s| s.state()),
+                    _ => None,
+                };
+                let is_dead = conn_state == Some(terminal::ConnState::Disconnected)
+                    || sftp_state == Some(sftp_browser::SftpState::Disconnected);
 
                 // Cely tab (puntik + nazev + zavirci "X") je JEDEN
                 // spolecny `Frame` se sdilenym pozadim - drive to byly
@@ -1325,7 +1334,9 @@ impl MainApp {
                                     .inner
                                     .clicked();
                                 if close_clicked {
-                                    if conn_state == Some(terminal::ConnState::Connected) {
+                                    let is_live = conn_state == Some(terminal::ConnState::Connected)
+                                        || sftp_state == Some(sftp_browser::SftpState::Connected);
+                                    if is_live {
                                         to_confirm_close = Some(CloseTabConfirm { idx, title: title.clone() });
                                     } else {
                                         to_close = Some(idx);
