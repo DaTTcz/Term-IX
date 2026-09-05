@@ -29,6 +29,8 @@
 
 mod app;
 mod i18n;
+#[cfg(target_os = "linux")]
+mod linux_desktop;
 mod sftp_browser;
 mod terminal;
 mod theme;
@@ -52,11 +54,31 @@ const ICON_BYTES: &[u8] = include_bytes!("../../../assets/icons/hicolor/128x128/
 /// preda se dal do [`app::TermxApp::new`], ktere ho pouzije pro
 /// pocatecni stav kontroly aktualizace v Home tabu (viz tam).
 pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry, skip_update_check: bool) -> anyhow::Result<()> {
+    // Sebeinstalace .desktop souboru + ikon do XDG slozek uzivatele -
+    // zpetna vazba "nemáme nikde ikonku aplikace ani v liště ani na
+    // ploše" (viz `linux_desktop`). Na jinych platformach netreba - tam
+    // uz ikonu resi bud instalator (Windows, zabudovana primo do .exe),
+    // nebo .app balicek (macOS).
+    #[cfg(target_os = "linux")]
+    linux_desktop::install();
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1150.0, 720.0])
             .with_min_inner_size([760.0, 440.0])
-            .with_icon(load_icon()),
+            .with_icon(load_icon())
+            // Wayland (napr. GNOME): bez shodneho app_id se ikonka v
+            // panelu/doku nezobrazi vubec, i kdyz jsou `.desktop` soubor
+            // i ikony spravne nainstalovane (viz `linux_desktop`, jehoz
+            // `StartupWMClass`/`Icon` pouzivaji stejny nazev "term-ix").
+            // POZNAMKA: podle dokumentace `ViewportBuilder::with_app_id`
+            // tohle u eframe zaroven urcuje umisteni uloziste pro
+            // `cc.storage` (`persist_window`/`AppSettings` nize) - starsi
+            // Linuxovi uzivatele tak jednorazove prijdou o ulozenou
+            // polohu okna/nastaveni (jazyk, tema, ...), nic
+            // bezpecnostne/datove kriticke (trezor je samostatny soubor,
+            // viz `vault_path`) - prijatelna cena za funkcni ikonu.
+            .with_app_id("term-ix"),
         // Pri prvnim spusteni (kdyz jeste neni co obnovit) se okno
         // vycentruje na obrazovce. `persist_window` pak pri kazdem
         // dalsim spusteni (diky cargo feature "persistence" u eframe)

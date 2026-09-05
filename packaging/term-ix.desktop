@@ -5,10 +5,19 @@ GenericName=Terminalovy klient
 Comment=Modularni terminalovy klient (SSH/Serial/FTP...)
 Exec=term-ix
 Icon=term-ix
-Terminal=true
+Terminal=false
 Categories=Network;TerminalEmulator;RemoteAccess;
+StartupWMClass=term-ix
 
-# Rucni instalace na Linuxu (bez baliku .deb/.rpm):
+# POZNAMKA: aplikace si od verze 0.3.x tento .desktop soubor i celou
+# sadu ikon nainstaluje SAMA automaticky pri kazdem spusteni na Linuxu
+# (viz `crates/termx-gui/src/linux_desktop.rs`) - s korektnim `Exec`
+# ukazujicim na skutecnou cestu prave bezici binarky (tady dole je jen
+# "term-ix", protoze tenhle soubor v repu slouzi hlavne jako
+# reference/fallback, ne jako to, co se skutecne instaluje).
+#
+# Rucni instalace na Linuxu (bez baliku .deb/.rpm, kdyby automaticka
+# sebeinstalace z nejakeho duvodu selhala nebo ji chcete provest sami):
 #   cp packaging/term-ix.desktop ~/.local/share/applications/
 #   for sz in 16 32 48 64 128 256 512; do
 #     mkdir -p ~/.local/share/icons/hicolor/${sz}x${sz}/apps
