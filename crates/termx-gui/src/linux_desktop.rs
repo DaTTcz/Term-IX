@@ -84,7 +84,7 @@ fn install_desktop_file(data_home: &std::path::Path) -> std::io::Result<()> {
          TryExec={exe}\n\
          Icon=term-ix\n\
          Terminal=false\n\
-         Categories=Network;TerminalEmulator;RemoteAccess;\n\
+         Categories=Network;TerminalEmulator;RemoteAccess;Utility;\n\
          StartupWMClass=term-ix\n"
     );
 

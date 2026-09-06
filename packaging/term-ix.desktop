@@ -6,7 +6,7 @@ Comment=Modularni terminalovy klient (SSH/Serial/FTP...)
 Exec=term-ix
 Icon=term-ix
 Terminal=false
-Categories=Network;TerminalEmulator;RemoteAccess;
+Categories=Network;TerminalEmulator;RemoteAccess;Utility;
 StartupWMClass=term-ix
 
 # POZNAMKA: aplikace si od verze 0.3.x tento .desktop soubor i celou
