@@ -41,17 +41,24 @@
 //!      `egui` byla nahrazena konstantou `Frame::NONE`), staci upravit
 //!      jen toto jedno volani; zbytek proužku (skladani `parts` do
 //!      textu) na tom nezavisi.
-//!   8. (nove, oznaceni textu mysi + Ctrl+C/Ctrl+V) `TerminalSession::render_grid`
+//!   8. (nove, oznaceni textu mysi + automaticke kopirovani) `TerminalSession::render_grid`
 //!      nahradilo puvodni `ui.add(Label::new(job).selectable(false))`
 //!      rucnim `ui.fonts(|f| f.layout_job(job))` + `ui.painter().galley(...)`,
 //!      aby slo presne mapovat pozici mysi na bunku mrizky. Vsechny
 //!      pouzite metody (`Fonts::layout_job`, `Painter::galley`,
-//!      `Context::copy_text`, `Context::set_cursor_icon`, `Event::Copy`)
+//!      `Context::copy_text`, `Context::set_cursor_icon`, `Response::drag_stopped`)
 //!      byly u verze egui 0.29.1 overeny primo v jeji dokumentaci
 //!      (docs.rs) - narozdil od `alacritty_terminal` tady tedy jde o
-//!      relativne nizke riziko. Pokud by presto `copy_text`/`Event::Copy`
-//!      v pouzite verzi chybely, nejpravdepodobnejsi nahrada je starsi
-//!      `ctx.output_mut(|o| o.copied_text = text)`.
+//!      relativne nizke riziko. Pokud by presto `copy_text`/`drag_stopped`
+//!      v pouzite verzi chybely, nejpravdepodobnejsi nahrada za prvni je
+//!      starsi `ctx.output_mut(|o| o.copied_text = text)`, za druhe pak
+//!      rucni porovnani `dragged()` mezi po sobe jdoucimi snimky.
+//!      (PUVODNI navrh vazal kopirovani na Ctrl+C/Cmd+C - zpetna vazba
+//!      "používáme CTRL+c/v na kopírování/vložení, budeme to muset
+//!      změnit" to zmenila na oznaceni = automaticka kopie /
+//!      `handle_selection_input`/, Ctrl+C uz jde VZDY primo na server
+//!      /`handle_keyboard`, `ctrl_control_code`/ - stejne UX jako
+//!      PuTTY a vetsina "klasickych" terminalu.)
 //! Rucni/automaticke znovupripojeni (`reconnect`/`maybe_auto_reconnect`,
 //! viz nize) zadne nove nejiste API nepridava - jen znovu vola uz
 //! overene `spawn_ssh_session`/`Term::new` se stejnymi parametry jako
@@ -579,15 +586,15 @@ impl TerminalSession {
     /// Zachyti klavesovy vstup z aktualniho snimku a preposle jej (jako
     /// syrove bajty/ANSI escape sekvence) do SSH spojeni.
     ///
-    /// Ctrl+C (na Macu Cmd+C) je zvlastni pripad - v beznem terminalu bez
-    /// oznaceneho textu posila SIGINT (0x03), ale kdyz je NECO OZNACENO
-    /// (`self.selection`, viz `handle_selection_input`), ma se misto toho
-    /// zkopirovat oznaceny text do schranky - presne jak se chova
-    /// Windows Terminal, VS Code i vetsina modernich terminalu. Rozlisuje
-    /// se pres vysokourovnovou udalost `egui::Event::Copy` (kterou
-    /// backend generuje pro platformni zkratku kopirovani - Ctrl+C i
-    /// Cmd+C - NAVIC vedle syrove `Event::Key`), ne rucnim resenim
-    /// modifikatoru u `Key::C`.
+    /// Ctrl+C (i Cmd+C na Macu) VZDY jde primo na server jako obycejny
+    /// ridici bajt 0x03 (SIGINT) - presne jako kazde jine Ctrl+pismeno,
+    /// viz `key_to_bytes`/`ctrl_control_code`. Zpetna vazba "používáme
+    /// CTRL+c/v na kopírování/vložení... CTRL+c je třeba poslat
+    /// serveru" - kopirovani oznaceneho textu uz NENI navazane na
+    /// zadnou klavesu, deje se automaticky primo pri dokonceni tazeni
+    /// mysi (viz `handle_selection_input`), presne jak se chova PuTTY
+    /// a vetsina "klasickych" terminalu. Ctrl+V zustava beze zmeny -
+    /// vkladani ze schranky resi `egui::Event::Paste` nize.
     ///
     /// Kdyz ma prave fokus nejaky JINY widget (napr. textove pole v
     /// otevrenem dialogu "Nový server"/Nastaveni, nebo vyhledavani ve
@@ -629,20 +636,6 @@ impl TerminalSession {
 
         let events = ui.input(|i| i.events.clone());
 
-        // Zjisti se PRED hlavnim pruchodem, aby vetev `Event::Key` nize
-        // vedela, ze se ma odpovidajici "syrovy" stisk Ctrl+C/Cmd+C
-        // preskocit (jinak by se poslalo SIGINT NAVIC k jiz provedenemu
-        // kopirovani - obe udalosti prichazeji ve stejnem snimku).
-        let copy_handled = if self.selection.is_some() && events.iter().any(|e| matches!(e, egui::Event::Copy)) {
-            if let Some(text) = self.selected_text() {
-                ui.ctx().copy_text(text);
-            }
-            self.selection = None;
-            true
-        } else {
-            false
-        };
-
         for event in events {
             match event {
                 // Bezny text (pismena, cislice, mezera, diakritika, ...) -
@@ -654,10 +647,11 @@ impl TerminalSession {
                 // NAVIC poslal i syrovy ridici bajt 0x16 za tento vlozeny
                 // text.
                 egui::Event::Paste(text) => self.send_bytes(text.into_bytes()),
+                // Ctrl+C/Cmd+C uz NENI vyjimka - jde vzdy primo na server
+                // jako normalni ridici bajt (0x03), viz `key_to_bytes`/
+                // `ctrl_control_code`. Kopirovani oznaceneho textu resi
+                // misto toho automaticky `handle_selection_input`.
                 egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                    if copy_handled && key == egui::Key::C && modifiers.ctrl {
-                        continue;
-                    }
                     if let Some(bytes) = key_to_bytes(key, modifiers) {
                         self.send_bytes(bytes);
                     }
@@ -677,10 +671,10 @@ impl TerminalSession {
     /// hvezdicka; i Backspace pri psani hesla zustava tiche (jen zmensi
     /// `pending_password`, na obrazovce se nic nezmeni).
     ///
-    /// (Na rozdil od `handle_keyboard` tu zamerne CHYBI zpracovani
-    /// `Event::Copy` - kopirovani oznaceneho textu behem prihlasovaciho
-    /// promptu neni podstatny pripad, ve hre je jen "login as: "/
-    /// "Password: ", zadny skutecny vystup ze serveru.)
+    /// (Oznaceni/kopirovani textu mysi behem prihlasovaciho promptu
+    /// resi uz `handle_selection_input` samo o sobe stejne jako jinde -
+    /// ve hre tu je jen "login as: "/"Password: ", zadny skutecny vystup
+    /// ze serveru, takze zvlastni zpracovani tady netreba.)
     ///
     /// Stejna pojistka proti "utoku" klavesnice do soucasne otevreneho
     /// dialogu jako u `handle_keyboard` - viz tamni komentar (vcetne
@@ -813,6 +807,14 @@ impl TerminalSession {
     /// nove oznaceni, pokracujici tazeni posouva jeho konec, a obycejny
     /// klik (bez tazeni) predchozi oznaceni zrusi - presne jak se chova
     /// kazdy bezny terminal.
+    ///
+    /// Jakmile tazeni SKONCI (`drag_stopped`), oznaceny text se rovnou
+    /// automaticky zkopiruje do schranky - zadna dalsi klavesa/kliknuti
+    /// netreba (presne UX jako PuTTY a vetsina "klasickych" terminalu).
+    /// Zpetna vazba "používáme CTRL+c/v na kopírování/vložení...
+    /// kopírování by mohlo být automatické když něco označíme" - Ctrl+C
+    /// uz tak nema dvoji vyznam a vzdy jde primo na server, viz
+    /// `handle_keyboard`.
     fn handle_selection_input(&mut self, response: &egui::Response, rect: egui::Rect, galley: &egui::Galley, cols: usize, rows: usize) {
         if response.drag_started() {
             if let Some(pos) = response.interact_pointer_pos() {
@@ -822,6 +824,12 @@ impl TerminalSession {
         } else if response.dragged() {
             if let (Some(pos), Some(sel)) = (response.interact_pointer_pos(), self.selection.as_mut()) {
                 sel.current = Self::point_to_cell(pos, rect, galley, cols, rows);
+            }
+        } else if response.drag_stopped() {
+            if let Some(text) = self.selected_text() {
+                if !text.is_empty() {
+                    response.ctx.copy_text(text);
+                }
             }
         } else if response.clicked() {
             self.selection = None;
