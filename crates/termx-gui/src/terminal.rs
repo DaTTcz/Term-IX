@@ -555,6 +555,19 @@ impl TerminalSession {
         let _ = self.handle.input_tx.send(SshInput::Data(bytes));
     }
 
+    /// Stabilni `Id` pro klavesovy fokus terminalu - odvozene primo z
+    /// `self.session.id` (`Uuid`, nezavisly na pozici v strome `Ui`), aby
+    /// bylo VZDY stejne bez ohledu na to, odkud se pocita
+    /// (`handle_keyboard`/`handle_credentials_keyboard` vs `render_grid`,
+    /// ktere jsou volane z ruznych/vnorenych `Ui` - napr. `render_grid`
+    /// bezi uvnitr `egui::ScrollArea`, takze `ui.id()` tam NENI stejne
+    /// jako `ui.id()` v `handle_keyboard`). Skutecne pozadani o fokus
+    /// (`Response::request_focus`) se deje jen v `render_grid`, kde tohle
+    /// `id` patri SKUTECNE interaktivni `Response` (viz tamni komentar).
+    fn focus_id(&self) -> egui::Id {
+        egui::Id::new(("term_kbd_focus", self.session.id))
+    }
+
     /// Rucne "doopise" dane bajty primo do terminaloveho bufferu
     /// (stejnou cestou, jakou normalne prochazeji data prijata ze
     /// serveru, viz `pump`) - pouzito pro lokalni prihlasovaci prompt
@@ -608,31 +621,24 @@ impl TerminalSession {
     /// zadny jiny widget fokus nedrzi) holy TAB odbocil na vestavenou
     /// fokus-navigaci egui (skok na nejaky fokusovatelny prvek v UI),
     /// misto aby se poslal na server jako bajt 0x09 - zpetna vazba
-    /// "šipky pro posun fungují, ale TAB pro doplňování příkazů ne".
+    /// "šipky pro posun fungují, ale TAB pro doplňování příkazů ne" (a
+    /// pak jeste "TAB mi pořád neposílá do terminálu ale běhá po menu" -
+    /// PRVNI pokus o opravu pouzival vlastni `Id` nenavazany na zadny
+    /// skutecny vykresleny widget, coz egui proste ignorovalo). Skutecne
+    /// pozadani/zamknuti fokusu se ted deje AZ v `render_grid` - jedine
+    /// misto, kde existuje skutecna interaktivni `Response` terminalu
+    /// (`self.focus_id()` je jeji `id`) - tahle funkce uz jen kontroluje,
+    /// jestli fokus prave nedrzi NEJAKY JINY widget.
     /// `ctx.memory(|m| m.focused())` je tak `Some(nejake_jine_id)` prave
     /// a jen tehdy, kdyz fokus drzi skutecne JINY widget; jakmile ho
     /// ztrati (dialog se zavre, pole ztrati fokus), egui to samo rozpozna
     /// na dalsim snimku a klavesnice se terminalu vrati bez dalsiho
     /// zasahu.
     fn handle_keyboard(&mut self, ui: &egui::Ui) {
-        let focus_id = ui.id().with("term_kbd_focus");
+        let focus_id = self.focus_id();
         if ui.ctx().memory(|m| m.focused().is_some_and(|f| f != focus_id)) {
             return;
         }
-        ui.memory_mut(|m| {
-            m.request_focus(focus_id);
-            // `set_focus_lock_filter` (ne uz zastarale `lock_focus`) rika
-            // egui, ktere klavesy s timto fokusem NEMAJI spoustet jeho
-            // vestavene chovani (fokus-navigace pro Tab/sipky, zruseni
-            // fokusu pro Escape), ale maji se misto toho poslat jako
-            // normalni `Event::Key` sem - presne to, co terminal
-            // potrebuje pro TAB (doplnovani prikazu), sipky (historie) i
-            // Escape (napr. `vim`).
-            m.set_focus_lock_filter(
-                focus_id,
-                egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true },
-            );
-        });
 
         let events = ui.input(|i| i.events.clone());
 
@@ -682,7 +688,7 @@ impl TerminalSession {
     /// sdileny identifikator drzi chovani konzistentni pri prepnuti
     /// mezi timto stavem a `handle_keyboard` v ramci jedne relace).
     fn handle_credentials_keyboard(&mut self, ui: &egui::Ui) {
-        let focus_id = ui.id().with("term_kbd_focus");
+        let focus_id = self.focus_id();
         if ui.ctx().memory(|m| m.focused().is_some_and(|f| f != focus_id)) {
             return;
         }
@@ -843,7 +849,7 @@ impl TerminalSession {
     /// (`ui.painter().galley`), aby bylo mozne presne mapovat pozici mysi
     /// na konkretni bunku mrizky (radek/sloupec) a nad textem zaroven
     /// registrovat vlastni interaktivni oblast (`Sense::click_and_drag`).
-    fn render_grid(&mut self, ui: &mut egui::Ui, font_size: f32) {
+    fn render_grid(&mut self, ui: &mut egui::Ui, font_size: f32, focused: bool) {
         let font_id = terminal_font(font_size);
         let (char_w, row_h) = ui.fonts(|f| (f.glyph_width(&font_id, 'M'), f.row_height(&font_id)));
         let (cols, rows) = { let grid = self.term.grid(); (grid.columns(), grid.screen_lines()) };
@@ -855,10 +861,68 @@ impl TerminalSession {
         // pripadna drobna nepresnost tohoto odhadu uz oznaceni textu
         // neovlivni.
         let size = egui::vec2(char_w * cols as f32, row_h * rows as f32);
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+        // DULEZITE: `ui.interact` s VLASTNIM explicitnim `id` (misto
+        // `ui.allocate_exact_size`, ktere by vygenerovalo sve vlastni
+        // automaticke id) - jen tak `self.focus_id()` (pouzite i v
+        // `handle_keyboard`/`handle_credentials_keyboard`) skutecne
+        // odpovida id teto konkretni interaktivni `Response`, a egui
+        // pozadavek na fokus/zamknuti Tabu nize bere vazne. (Puvodni
+        // pokus pouzival `ui.id().with(...)` vytvorene v UPLNE JINE
+        // casti stromu Ui - takove id nepatrilo zadnemu skutecnemu
+        // widgetu, takze ho egui pri navigaci Tabem proste ignorovalo.)
+        let focus_id = self.focus_id();
+        let (_, rect) = ui.allocate_space(size);
+        let response = ui.interact(rect, focus_id, egui::Sense::click_and_drag());
+
+        if focused {
+            // Nechceme krast fokus jinemu, skutecne fokusovanemu widgetu
+            // (napr. otevrenemu dialogu) - viz `handle_keyboard`.
+            let other_focused = ui.ctx().memory(|m| m.focused().is_some_and(|f| f != focus_id));
+            if !other_focused {
+                response.request_focus();
+                // `set_focus_lock_filter` rika egui, ktere klavesy s
+                // timto fokusem NEMAJI spoustet jeho vestavene chovani
+                // (fokus-navigace pro Tab/sipky, zruseni fokusu pro
+                // Escape), ale maji se misto toho poslat jako normalni
+                // `Event::Key` do `handle_keyboard` - presne to, co
+                // terminal potrebuje pro TAB (doplnovani prikazu), sipky
+                // (historie) i Escape (napr. `vim`).
+                ui.memory_mut(|m| {
+                    m.set_focus_lock_filter(
+                        focus_id,
+                        egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true },
+                    );
+                });
+            }
+        } else if response.has_focus() {
+            // Tento panel prave neni aktivni (napr. Ctrl+Tab v rozdelenem
+            // zobrazeni prepnul na druhy panel) - uvolni drzeny fokus, aby
+            // TAB v prave aktivnim panelu fungoval bez omezeni.
+            response.surrender_focus();
+        }
 
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        }
+
+        // Zpetna vazba "CTRL+v bychom mohli dát i kliknutí pravou myší" -
+        // klik pravym tlacitkem myslu VZDY vlozi aktualni obsah schranky
+        // (presne UX jako PuTTY a vetsina "klasickych" terminalu), bez
+        // ohledu na `focused` - jde o klik NA KONKRETNI panel, ne o
+        // globalni klavesovou udalost snimku (na rozdil od Ctrl+V), takze
+        // se prirozene tyka jen toho panelu, na ktery uzivatel skutecne
+        // klikl. Cteni schranky (na rozdil od `Context::copy_text`, ktere
+        // ma egui vestavene) resi primo `arboard` - `eframe` uz ho sam
+        // pouziva interne pro vlastni Ctrl+V, jde tedy o vyuziti uz
+        // existujici zavislosti (viz `Cargo.toml`), ne o novou.
+        if response.secondary_clicked() {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                if let Ok(text) = clipboard.get_text() {
+                    if !text.is_empty() {
+                        self.send_bytes(text.into_bytes());
+                    }
+                }
+            }
         }
 
         // Galley se sestavi PRED zpracovanim tazeni mysi (viz nize), aby
@@ -930,18 +994,10 @@ impl TerminalSession {
             } else {
                 self.handle_keyboard(ui);
             }
-        } else {
-            // Tento panel prave neni aktivni (napr. Ctrl+Tab v rozdelenem
-            // zobrazeni prepnul na druhy panel) - uvolni pripadne drzeny
-            // zamknuty fokus (viz `handle_keyboard`), aby TAB v prave
-            // aktivnim panelu fungoval bez omezeni.
-            let focus_id = ui.id().with("term_kbd_focus");
-            ui.memory_mut(|m| {
-                if m.focused() == Some(focus_id) {
-                    m.surrender_focus(focus_id);
-                }
-            });
         }
+        // (Uvolneni drzeneho fokusu, kdyz `focused == false`, resi
+        // `render_grid` nize - jedine misto se skutecnou interaktivni
+        // `Response` terminalu.)
 
         // Dokud je tab otevreny/aktivni, chceme obrazovku prubezne
         // obcerstvovat i bez interakce uzivatele (aby se novy vystup ze
@@ -996,7 +1052,7 @@ impl TerminalSession {
         self.resize_to_fit(ui, font_size);
 
         egui::ScrollArea::both().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
-            self.render_grid(ui, font_size);
+            self.render_grid(ui, font_size, focused);
         });
     }
 
