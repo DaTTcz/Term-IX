@@ -38,3 +38,18 @@ tokio = { workspace = true }
 # Vestaveny terminalovy emulator (VT100/ANSI parser + mrizka znaku) -
 # viz `terminal.rs`.
 alacritty_terminal = { workspace = true }
+# Primy synchronni pristup ke schrance (`Clipboard::new().get_text()`)
+# pro "vlozeni pravym klikem" v terminalu (viz `terminal.rs`,
+# `render_grid`) - egui samo o sobe zadne API na CTENI schranky nema
+# (jen `Context::copy_text` na zapis), cte se jen nepřímo skrz
+# `Event::Paste`, ktery generuje backend pro Ctrl+V/Cmd+V. `eframe` uz
+# `arboard` (presne tuto verzi - viz `Cargo.lock`) pouziva sam interne
+# pro tenhle Ctrl+V, takze jde jen o pouziti uz existujici zavislosti
+# primo, ne o novou.
+#
+# POZOR pri buildu: pridani teto radky vyzaduje, aby se `Cargo.lock`
+# zaznamu `termx-gui` doplnila zavislost na `arboard` (`cargo
+# build`/`cargo check` to udela samo automaticky) - toto NEDELAT rucni
+# upravou `Cargo.lock` bez skutecneho spusteni cargo, viz historie
+# commitu k v0.3.4 (rozbity `--locked` release build).
+arboard = "3.6"
