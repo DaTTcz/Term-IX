@@ -662,6 +662,20 @@ impl TerminalSession {
                         self.send_bytes(bytes);
                     }
                 }
+                // DULEZITE: backend (egui-winit) zachytava Ctrl+C/Cmd+C
+                // (a na Windows i Ctrl+Insert) uz PRED tim, nez by se
+                // dostal jako normalni `Event::Key{key: C, ..}` sem -
+                // misto toho posle rovnou tenhle `Event::Copy` (viz
+                // `is_copy_command`/`on_keyboard_input` v egui-winit;
+                // Key varianta se v tomhle pripade vubec NEPOSLE). Bez
+                // tehle vetve tak Ctrl+C skoncil tise v `_ => {}` a na
+                // server se nikdy neposlal ridici bajt 0x03 - zpetna
+                // vazba "nefunguje poslání CTRL+c". Kopirovani
+                // oznaceneho textu uz mezitim resi samo
+                // `handle_selection_input` (auto-copy pri pusteni
+                // tazeni mysi), takze tady je spravne vzdy poslat 0x03
+                // na server, presne jako u kazdeho jineho Ctrl+pismene.
+                egui::Event::Copy => self.send_bytes(vec![0x03]),
                 _ => {}
             }
         }
