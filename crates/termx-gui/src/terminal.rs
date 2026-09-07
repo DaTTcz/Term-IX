@@ -594,17 +594,38 @@ impl TerminalSession {
     /// stromu serveru), klavesnice terminalu vubec nepatri - jinak by se
     /// psani do takoveho pole soucasne posilalo i na SSH kanal (zpetna
     /// vazba: "když píšu v popup okně tak zároven píšu i v terminálu").
-    /// Terminal sam zadny skutecny fokusovatelny widget (`TextEdit`
-    /// apod.) nema - vzdy jen rucne vykresluje (`render_grid`) - takze
-    /// `ctx.memory(|m| m.focused())` vraci `Some` prave a jen tehdy, kdyz
-    /// fokus drzi nejaky takovy JINY widget; jakmile ho ztrati (dialog se
-    /// zavre, pole ztrati fokus), egui to samo rozpozna na dalsim
-    /// snimku (widget uz neni vykreslen/nehlasi zajem o fokus) a
-    /// klavesnice se terminalu vrati bez dalsiho zasahu.
+    /// Terminal sam jinak zadny skutecny fokusovatelny widget (`TextEdit`
+    /// apod.) nema - vzdy jen rucne vykresluje (`render_grid`) - proto se
+    /// pro sebe explicitne "zamyka" klavesovy fokus nize (`request_focus`
+    /// + `set_focus_lock_filter` pod vlastnim `focus_id`): bez toho by (protoze
+    /// zadny jiny widget fokus nedrzi) holy TAB odbocil na vestavenou
+    /// fokus-navigaci egui (skok na nejaky fokusovatelny prvek v UI),
+    /// misto aby se poslal na server jako bajt 0x09 - zpetna vazba
+    /// "šipky pro posun fungují, ale TAB pro doplňování příkazů ne".
+    /// `ctx.memory(|m| m.focused())` je tak `Some(nejake_jine_id)` prave
+    /// a jen tehdy, kdyz fokus drzi skutecne JINY widget; jakmile ho
+    /// ztrati (dialog se zavre, pole ztrati fokus), egui to samo rozpozna
+    /// na dalsim snimku a klavesnice se terminalu vrati bez dalsiho
+    /// zasahu.
     fn handle_keyboard(&mut self, ui: &egui::Ui) {
-        if ui.ctx().memory(|m| m.focused()).is_some() {
+        let focus_id = ui.id().with("term_kbd_focus");
+        if ui.ctx().memory(|m| m.focused().is_some_and(|f| f != focus_id)) {
             return;
         }
+        ui.memory_mut(|m| {
+            m.request_focus(focus_id);
+            // `set_focus_lock_filter` (ne uz zastarale `lock_focus`) rika
+            // egui, ktere klavesy s timto fokusem NEMAJI spoustet jeho
+            // vestavene chovani (fokus-navigace pro Tab/sipky, zruseni
+            // fokusu pro Escape), ale maji se misto toho poslat jako
+            // normalni `Event::Key` sem - presne to, co terminal
+            // potrebuje pro TAB (doplnovani prikazu), sipky (historie) i
+            // Escape (napr. `vim`).
+            m.set_focus_lock_filter(
+                focus_id,
+                egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true },
+            );
+        });
 
         let events = ui.input(|i| i.events.clone());
 
@@ -662,9 +683,13 @@ impl TerminalSession {
     /// "Password: ", zadny skutecny vystup ze serveru.)
     ///
     /// Stejna pojistka proti "utoku" klavesnice do soucasne otevreneho
-    /// dialogu jako u `handle_keyboard` - viz tamni komentar.
+    /// dialogu jako u `handle_keyboard` - viz tamni komentar (vcetne
+    /// stejneho `focus_id` - TAB tu sice nema smysl zamykat, ale
+    /// sdileny identifikator drzi chovani konzistentni pri prepnuti
+    /// mezi timto stavem a `handle_keyboard` v ramci jedne relace).
     fn handle_credentials_keyboard(&mut self, ui: &egui::Ui) {
-        if ui.ctx().memory(|m| m.focused()).is_some() {
+        let focus_id = ui.id().with("term_kbd_focus");
+        if ui.ctx().memory(|m| m.focused().is_some_and(|f| f != focus_id)) {
             return;
         }
 
@@ -897,6 +922,17 @@ impl TerminalSession {
             } else {
                 self.handle_keyboard(ui);
             }
+        } else {
+            // Tento panel prave neni aktivni (napr. Ctrl+Tab v rozdelenem
+            // zobrazeni prepnul na druhy panel) - uvolni pripadne drzeny
+            // zamknuty fokus (viz `handle_keyboard`), aby TAB v prave
+            // aktivnim panelu fungoval bez omezeni.
+            let focus_id = ui.id().with("term_kbd_focus");
+            ui.memory_mut(|m| {
+                if m.focused() == Some(focus_id) {
+                    m.surrender_focus(focus_id);
+                }
+            });
         }
 
         // Dokud je tab otevreny/aktivni, chceme obrazovku prubezne
