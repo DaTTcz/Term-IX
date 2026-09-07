@@ -905,25 +905,14 @@ impl TerminalSession {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         }
 
-        // Zpetna vazba "CTRL+v bychom mohli dát i kliknutí pravou myší" -
-        // klik pravym tlacitkem myslu VZDY vlozi aktualni obsah schranky
-        // (presne UX jako PuTTY a vetsina "klasickych" terminalu), bez
-        // ohledu na `focused` - jde o klik NA KONKRETNI panel, ne o
-        // globalni klavesovou udalost snimku (na rozdil od Ctrl+V), takze
-        // se prirozene tyka jen toho panelu, na ktery uzivatel skutecne
-        // klikl. Cteni schranky (na rozdil od `Context::copy_text`, ktere
-        // ma egui vestavene) resi primo `arboard` - `eframe` uz ho sam
-        // pouziva interne pro vlastni Ctrl+V, jde tedy o vyuziti uz
-        // existujici zavislosti (viz `Cargo.toml`), ne o novou.
-        if response.secondary_clicked() {
-            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                if let Ok(text) = clipboard.get_text() {
-                    if !text.is_empty() {
-                        self.send_bytes(text.into_bytes());
-                    }
-                }
-            }
-        }
+        // POZNAMKA: "vlozeni pravym klikem" (zpetna vazba "CTRL+v bychom
+        // mohli dát i kliknutí pravou myší") se sem docasne NEPRIDAVALO -
+        // vyzadovalo by novou zavislost (cteni schranky, ktere egui samo
+        // nema), a rucni doplneni takove zmeny do `Cargo.lock` bez
+        // skutecneho spusteni cargo se ukazalo jako nespolehlive (CI
+        // build s `--locked` selhal - "cannot update the lock file").
+        // Vraceno k jednodussi/spolehlive overene verzi bez teto
+        // zavislosti; TAB fix vyse zustava beze zmeny.
 
         // Galley se sestavi PRED zpracovanim tazeni mysi (viz nize), aby
         // `handle_selection_input` mohlo pro tento snimek pouzit jeho
