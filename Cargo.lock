@@ -4478,7 +4478,7 @@ dependencies = [
 [[package]]
 name = "term-ix"
 # WORKSPACE VERZE - MUSI byt shodna s [workspace.package].version v Cargo.toml (jinak CI build selze, viz --locked)!
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -4494,7 +4494,7 @@ dependencies = [
 [[package]]
 name = "termx-core"
 # WORKSPACE VERZE - MUSI byt shodna s [workspace.package].version v Cargo.toml (jinak CI build selze, viz --locked)!
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4508,7 +4508,7 @@ dependencies = [
 [[package]]
 name = "termx-gui"
 # WORKSPACE VERZE - MUSI byt shodna s [workspace.package].version v Cargo.toml (jinak CI build selze, viz --locked)!
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -4529,7 +4529,7 @@ dependencies = [
 [[package]]
 name = "termx-splash"
 # WORKSPACE VERZE - MUSI byt shodna s [workspace.package].version v Cargo.toml (jinak CI build selze, viz --locked)!
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "fontdue",
@@ -4541,7 +4541,7 @@ dependencies = [
 [[package]]
 name = "termx-ssh"
 # WORKSPACE VERZE - MUSI byt shodna s [workspace.package].version v Cargo.toml (jinak CI build selze, viz --locked)!
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4557,7 +4557,7 @@ dependencies = [
 [[package]]
 name = "termx-update"
 # WORKSPACE VERZE - MUSI byt shodna s [workspace.package].version v Cargo.toml (jinak CI build selze, viz --locked)!
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "self_update",
@@ -4566,7 +4566,7 @@ dependencies = [
 [[package]]
 name = "termx-vault"
 # WORKSPACE VERZE - MUSI byt shodna s [workspace.package].version v Cargo.toml (jinak CI build selze, viz --locked)!
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aes-gcm",
  "anyhow",
