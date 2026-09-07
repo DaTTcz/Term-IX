@@ -872,7 +872,18 @@ impl TerminalSession {
         // widgetu, takze ho egui pri navigaci Tabem proste ignorovalo.)
         let focus_id = self.focus_id();
         let (_, rect) = ui.allocate_space(size);
-        let response = ui.interact(rect, focus_id, egui::Sense::click_and_drag());
+        // `Sense::click_and_drag()` ma vnitrne `focusable: false` (jen
+        // klik/tazeni, ne klavesovy fokus) - protoze na tuto plochu nize
+        // AKTIVNE voláme `request_focus()`, musime `focusable` rucne
+        // nastavit na `true`, jinak zustava widget v nekonzistentnim
+        // stavu ("ma fokus, ale sam sebe fokusovatelny neoznacuje"), coz
+        // pravdepodobne zpusobovalo, ze nektere klavesy (napr. Ctrl+C)
+        // uz nedosly az do `handle_keyboard` - zpetna vazba "nefunguje
+        // poslání CTRL+c a pravé tlačítko myši" (pravé tlačítko bylo
+        // mezitim docasne odstraneno kvuli jinemu problemu, viz predchozi
+        // commit - tohle se tyka jen Ctrl+C).
+        let sense = egui::Sense { focusable: true, ..egui::Sense::click_and_drag() };
+        let response = ui.interact(rect, focus_id, sense);
 
         if focused {
             // Nechceme krast fokus jinemu, skutecne fokusovanemu widgetu
