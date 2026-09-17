@@ -68,10 +68,30 @@ pub struct AppSettings {
     /// Jestli bylo hlavni okno naposledy MAXIMALIZOVANE (ne
     /// minimalizovane - to se zamerne vubec nesleduje ani neuklada, viz
     /// `TermxApp::update`) - obnovuje se pri pristim spusteni (viz
-    /// `lib.rs::run_app`), navic k puvodni poloze/velikosti okna, kterou
-    /// uz drive sam obnovuje `persist_window` (eframe).
+    /// `lib.rs::run_app`).
     #[serde(default)]
     pub window_maximized: bool,
+    /// Posledni znama velikost/poloha HLAVNIHO pracovniho okna (mimo
+    /// pocatecni splash fazi) - `None`, dokud okno jeste nikdy neopustilo
+    /// splash fazi (viz `TermxApp::update`), pripadne u stareho ulozeneho
+    /// nastaveni bez tohoto pole (`#[serde(default)]`).
+    ///
+    /// PUVODNE se na tohle spolehal primo `persist_window` (eframe) - to
+    /// ale prestalo fungovat pote, co splash animace prestala byt
+    /// samostatne okno a zacala bezet primo v tomhle stejnem okne
+    /// (`termx-splash` -> `splash` modul zde): kvuli tomu okno pri
+    /// KAZDEM startu musi projit docasnym zmensenim na malou splash
+    /// velikost a pak zpetnym zvetsenim (viz `PendingResize`), a to
+    /// zpetne zvetseni (`resize_to_main_window`) drive pouzivalo napevno
+    /// `crate::MAIN_WINDOW_SIZE` misto skutecne posledni velikosti/polohy -
+    /// zpetna vazba "program si přestal pamatovat poslední velikost okna
+    /// a maximalizaci". Aplikace si tedy ted (podobne jako uz drive u
+    /// `window_maximized` vyse) velikost/polohu sleduje a uklada SAMA,
+    /// nezavisle na `persist_window`.
+    #[serde(default)]
+    pub window_size: Option<[f32; 2]>,
+    #[serde(default)]
+    pub window_pos: Option<[f32; 2]>,
     /// Jazyk UI aplikace - viz [`crate::i18n::Lang`] a pozadavek "do
     /// nastavení bych dal možnost dropdown vybrat si jazyk". `#[serde(default)]`
     /// kvuli zpetne kompatibilite s nastavenimi ulozenymi pred zavedenim
@@ -123,6 +143,8 @@ impl Default for AppSettings {
         Self {
             auto_reconnect: false,
             window_maximized: false,
+            window_size: None,
+            window_pos: None,
             lang: Lang::default(),
             theme: theme::Theme::default(),
             sidebar_visible: true,
@@ -4542,6 +4564,15 @@ pub struct TermxApp {
     /// zamceny/odemceny (okno jde maximalizovat i na zamcene
     /// obrazovce).
     window_maximized: bool,
+    /// Posledni znama velikost/poloha hlavniho pracovniho okna, MIMO
+    /// pocatecni splash fazi - stejny duvod a stejny vzor jako
+    /// `window_maximized` vyse (musi se prubezne sledovat pres `ctx` v
+    /// `update`, protoze `save` uz `ctx` nema k dispozici), viz
+    /// `AppSettings::window_size`/`window_pos`. `resize_to_main_window`
+    /// (volano z `update`) tuto hodnotu pouzije MISTO napevno dane
+    /// `crate::MAIN_WINDOW_SIZE`, kdyz uz je znama.
+    window_size: Option<[f32; 2]>,
+    window_pos: Option<[f32; 2]>,
     /// Pocitadlo zbyvajicich pokusu vynutit aktualni `pending_resize`
     /// (viz `RESIZE_ATTEMPT_BUDGET` a `update` nize) - `0` znamena, ze uz
     /// se o to neni potreba snazit (bud se pokusy vycerpaly, nebo zadna
@@ -4573,6 +4604,8 @@ impl TermxApp {
     ) -> Self {
         let initial_settings: AppSettings = storage.and_then(|s| eframe::get_value(s, SETTINGS_STORAGE_KEY)).unwrap_or_default();
         let window_maximized = initial_settings.window_maximized;
+        let window_size = initial_settings.window_size;
+        let window_pos = initial_settings.window_pos;
         Self {
             vault_path,
             registry: Some(registry),
@@ -4583,6 +4616,8 @@ impl TermxApp {
             },
             initial_settings,
             window_maximized,
+            window_size,
+            window_pos,
             // Kdyz se ma zobrazit splash, je treba hned od prvniho snimku
             // (opakovane, viz `update`) vynucovat jeho malou velikost
             // (`PendingResize::ToSplash`) - `eframe`uv `persist_window`
@@ -4790,6 +4825,24 @@ impl eframe::App for TermxApp {
             self.window_maximized = maximized;
         }
 
+        // Prubezne sledovani velikosti/polohy okna - stejny duvod jako u
+        // maximalizace vyse (viz `AppSettings::window_size`/`window_pos`),
+        // ale JEN kdyz uz je okno usazene v normalni pracovni velikosti:
+        // behem splash faze (`LockState::Splash`) i behem opakovaneho
+        // vynucovani `pending_resize` po jejim skonceni
+        // (`resize_attempts > 0`) ma okno docasne "nespravnou" velikost
+        // (malou splash, nebo se prave meni) - kdyby se tahle prechodna
+        // velikost ulozila jako posledni znama, dalsi start by zacinal
+        // spatne.
+        if self.resize_attempts == 0 && !matches!(self.state, LockState::Splash(_)) {
+            if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
+                self.window_size = Some([rect.width(), rect.height()]);
+            }
+            if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
+                self.window_pos = Some([rect.min.x, rect.min.y]);
+            }
+        }
+
         // Opakovane vynuceni aktualni `pending_resize` (viz
         // `RESIZE_ATTEMPT_BUDGET`/`PendingResize` vyse) - stejny duvod
         // jako u opakovaneho fokusu (`LockScreen::focus_attempts`): jediny
@@ -4804,7 +4857,7 @@ impl eframe::App for TermxApp {
             match self.pending_resize {
                 PendingResize::None => {}
                 PendingResize::ToSplash => shrink_to_splash_window(ctx),
-                PendingResize::ToMain => resize_to_main_window(ctx),
+                PendingResize::ToMain => resize_to_main_window(ctx, self.window_size, self.window_pos),
                 PendingResize::ToMaximized => ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true)),
             }
             ctx.request_repaint();
@@ -4862,37 +4915,57 @@ impl eframe::App for TermxApp {
             LockState::Splash(_) | LockState::Locked(_) => self.initial_settings.clone(),
         };
         settings.window_maximized = self.window_maximized;
+        // `self.window_size`/`window_pos` (viz tam) uz samy od `new`
+        // nesou aspon puvodni ulozenou hodnotu (`initial_settings.window_size`/
+        // `window_pos`), a aktualizuji se na cerstvou jen po opusteni
+        // splash faze (viz `update`) - i kdyby tedy tento konkretni beh
+        // zavrel okno jeste behem splashe, nic se tim neztrati.
+        settings.window_size = self.window_size;
+        settings.window_pos = self.window_pos;
         eframe::set_value(storage, SETTINGS_STORAGE_KEY, &settings);
     }
 }
 
 /// Zvetsi okno z male pocatecni "splash" velikosti (`splash::WINDOW_SIZE`)
-/// na normalni pracovni velikost aplikace (`crate::MAIN_WINDOW_SIZE`) a
-/// znovu ho vycentruje na obrazovce - volano jen jednou, hned po dobehnuti
-/// splash animace (viz `update` vyse). `NativeOptions::centered` (viz
-/// `lib.rs::run_app`) totiz vycentruje okno jen v jeho PUVODNI (male)
-/// velikosti pri startu, ne uz po tomto rucnim zvetseni - bez rucniho
-/// dopocitani polohy by tak zvetsene okno zustalo "prilepene" k puvodnimu
-/// levemu hornimu rohu misto aby zustalo vystredene.
+/// zpet na jeho POSLEDNI ZNAMOU pracovni velikost/polohu (`restore_size`/
+/// `restore_pos` - viz `TermxApp::window_size`/`window_pos`), nebo na
+/// vychozi `crate::MAIN_WINDOW_SIZE` vystredene na obrazovce, kdyz zadna
+/// znama velikost/poloha jeste neni (typicky uplne prvni spusteni) -
+/// volano jen jednou, hned po dobehnuti splash animace (viz `update`
+/// vyse).
+///
+/// DRIVE se sem napevno dosazovalo jen `crate::MAIN_WINDOW_SIZE` a okno
+/// se vzdy znovu vycentrovalo, bez ohledu na to, jakou velikost/polohu
+/// mel uzivatel pri minulem zavreni - kvuli tomu si aplikace na Linuxu
+/// (kde puvodni `persist_window` uz nestihalo zabrat, viz
+/// `AppSettings::window_size`) prestala pamatovat posledni velikost
+/// okna (zpetna vazba "program si přestal pamatovat poslední velikost
+/// okna a maximalizaci").
+///
+/// `NativeOptions::centered` (viz `lib.rs::run_app`) vycentruje okno jen
+/// v jeho PUVODNI (male) velikosti pri startu, ne uz po tomto rucnim
+/// zvetseni - proto se poloha dopocitava/nastavuje rucne i tady.
 ///
 /// POZNAMKA K OVERENI: `ViewportInfo::monitor_size` (pres
 /// `ctx.input(|i| i.viewport().monitor_size)`) je v egui/eframe ~0.29
 /// dostupny zpusob, jak zjistit rozmery aktualniho monitoru - v tomto
 /// prostredi nebylo mozne overit skutecnym `cargo build`. Kdyby backend
-/// tuto hodnotu (zatim) nevratil (`None`, typicky hned prvni snimek),
-/// zvetseni okna se provede, jen se nedopocitava nova poloha - okno pak
-/// zustane tam, kde bylo (typicky levy horni roh), coz je jen kosmeticka
-/// vada, ne funkcni problem.
-fn resize_to_main_window(ctx: &egui::Context) {
+/// tuto hodnotu (zatim) nevratil (`None`, typicky hned prvni snimek) a
+/// zaroven nebyla znama ani `restore_pos`, zvetseni okna se provede, jen
+/// se nedopocitava nova poloha - okno pak zustane tam, kde bylo (typicky
+/// levy horni roh), coz je jen kosmeticka vada, ne funkcni problem.
+fn resize_to_main_window(ctx: &egui::Context, restore_size: Option<[f32; 2]>, restore_pos: Option<[f32; 2]>) {
     // Nejdriv vratit normalni minimalni velikost (`crate::MAIN_MIN_WINDOW_SIZE`)
     // - behem splash faze byla docasne zmensena na `splash::WINDOW_SIZE`
     // (viz `lib.rs::run_app`), a kdyby tu zustala, mohla by (na nekterych
     // WM) bránit `InnerSize` nize v rustu NAD puvodni min-size, kdyby si
     // ji backend jeste nestihl aktualizovat.
     ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(crate::MAIN_MIN_WINDOW_SIZE.into()));
-    let size = egui::Vec2::from(crate::MAIN_WINDOW_SIZE);
+    let size = egui::Vec2::from(restore_size.unwrap_or(crate::MAIN_WINDOW_SIZE));
     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-    if let Some(monitor_size) = ctx.input(|i| i.viewport().monitor_size) {
+    if let Some(pos) = restore_pos {
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::Pos2::from(pos)));
+    } else if let Some(monitor_size) = ctx.input(|i| i.viewport().monitor_size) {
         let pos = egui::pos2(((monitor_size.x - size.x) / 2.0).max(0.0), ((monitor_size.y - size.y) / 2.0).max(0.0));
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
     }
