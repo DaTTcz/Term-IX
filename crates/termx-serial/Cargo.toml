@@ -1,0 +1,14 @@
+[package]
+name = "termx-serial"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Term-IX Serial/COM protocol module (serialport - blokujici pristup k seriove lince, bez dalsich systemovych zavislosti na Linuxu i Windows)"
+
+[dependencies]
+termx-core = { workspace = true }
+anyhow = { workspace = true }
+async-trait = "0.1"
+serialport = { workspace = true }

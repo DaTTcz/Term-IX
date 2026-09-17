@@ -13,3 +13,15 @@ tracing = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 minifb = "0.27"
 fontdue = "0.9"
+
+# Jen pro vycentrovani splash okna na Linuxu (viz `primary_screen_size` v
+# lib.rs) - stejny ucel jako primy Win32 FFI dotaz na Windows nize (build.rs
+# u binarky), jen pres X11. `minifb` uz `x11-dl` sam tahne tranzitivne (viz
+# Cargo.lock) pro svuj X11 backend, takze jde o verzi, ktera uz je stejne
+# stazena/zkompilovana - zadna nova "tezka" zavislost navic. Na Waylandu
+# (kde X11 knihovna bud chybi, nebo `XOpenDisplay` proste neuspeje - viz
+# `primary_screen_size`) se centrovani jen tise preskoci, presne podle
+# stejneho principu jako u `try_show_splash` - kosmeticky bonus nikdy
+# nesmi zabranit startu.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = "2.21"

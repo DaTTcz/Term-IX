@@ -409,7 +409,7 @@ async fn run_session(
     // tomu uzivatel uvidi, ze spojeni se serverem uz zacalo (transport
     // je navazan), presne jako u obycejneho `ssh` klienta, ktery se
     // taky nejdriv pripoji a teprve pak se (lokalne) zepta na heslo.
-    let config = Arc::new(russh::client::Config::default());
+    let config = Arc::new(crate::legacy_friendly_config());
     let addr = (session.host.as_str(), session.port);
 
     let mut handle = russh::client::connect(config, addr, TofuHandler)
@@ -476,8 +476,10 @@ async fn run_session(
                     },
                 };
 
-                let authenticated = handle
-                    .authenticate_password(&username, &password)
+                // Viz `crate::authenticate_password_or_keyboard_interactive` -
+                // nektera zarizeni (Avaya CM SAT apod.) prijimaji jen
+                // "keyboard-interactive", ne primo "password".
+                let authenticated = crate::authenticate_password_or_keyboard_interactive(&mut handle, &username, &password)
                     .await
                     .map_err(|e| anyhow::anyhow!("SSH autentizace selhala: {e}"))?;
 
@@ -500,8 +502,12 @@ async fn run_session(
         .await
         .map_err(|e| anyhow::anyhow!("nelze otevřít SSH kanál: {e}"))?;
 
+    // Viz `Session::term_type` - typicky nastaveno napr. na "513" pro
+    // Avaya CM SAT, kde vychozi `xterm-256color` nefunguje spravne
+    // (ocekavane mapovani funkcnich klaves F1-F8/Cancel).
+    let term_type = session.term_type.as_deref().unwrap_or("xterm-256color");
     channel
-        .request_pty(false, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
+        .request_pty(false, term_type, cols as u32, rows as u32, 0, 0, &[])
         .await
         .map_err(|e| anyhow::anyhow!("požadavek na pty selhal: {e}"))?;
     channel

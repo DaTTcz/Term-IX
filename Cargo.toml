@@ -5,12 +5,12 @@ members = [
     "crates/termx-vault",
     "crates/termx-update",
     "crates/termx-ssh",
-    "crates/termx-splash",
+    "crates/termx-serial",
     "crates/termx-gui",
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["DaTTcz"]
 repository = "https://github.com/DaTTcz/Term-IX"
@@ -21,7 +21,7 @@ termx-core = { path = "crates/termx-core" }
 termx-vault = { path = "crates/termx-vault" }
 termx-update = { path = "crates/termx-update" }
 termx-ssh = { path = "crates/termx-ssh" }
-termx-splash = { path = "crates/termx-splash" }
+termx-serial = { path = "crates/termx-serial" }
 termx-gui = { path = "crates/termx-gui" }
 
 anyhow = "1"
@@ -42,6 +42,11 @@ rfd = "0.15"
 # stav obrazovky (mrizka znaku, barvy, kurzor), ktery termx-gui
 # vykresluje primo v tabu misto puvodni nahradni obrazovky.
 alacritty_terminal = "0.24"
+# Seriovy/COM port modul (termx-serial) - blokujici (ne async) pristup
+# k seriove lince, stejny pristup jako vetsina Rust CLI/GUI nastroju
+# pro RS-232/USB-serial (funguje shodne na Linuxu i Windows bez
+# dalsich systemovych zavislosti).
+serialport = "4"
 
 [package]
 name = "term-ix"
@@ -59,7 +64,7 @@ path = "src/main.rs"
 [dependencies]
 termx-core = { workspace = true }
 termx-ssh = { workspace = true }
-termx-splash = { workspace = true }
+termx-serial = { workspace = true }
 termx-gui = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }

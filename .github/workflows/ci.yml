@@ -1,0 +1,60 @@
+name: CI
+
+# Spousti se pri kazdem pushi do "main" a pri kazdem pull requestu - na
+# rozdil od `release.yml` (ten bezi jen pri vytvoreni tagu "vX.Y.Z" a
+# rovnou builduje/nahrava distribucni binarky) tenhle workflow jen overi,
+# ze projekt jde zkompilovat na obou cilovych platformach (Windows i
+# Linux) - `cargo check`, ne plny `--release` build, aby byl rychlejsi.
+# Stejne nastaveni uz pouziva i eR-Commander (https://github.com/DaTTcz/eR-Commander),
+# viz `.github/workflows/ci.yml` tam - zamerne prevzato 1:1 (vc. seznamu
+# systemovych -dev knihoven nize), aby oba projekty mely stejny, uz
+# osvedceny CI postup.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Stejna sada -dev knihoven jako v eR-Commanderu (o neco sirsi, nez
+      # puvodne mel jen `release.yml` tady v Term-IX) - potreba k
+      # slinkovani egui/eframe (glow + winit, X11/Wayland backend) na
+      # ubuntu-latest, kde (na rozdil od Windows) nejsou vestavene v
+      # runneru.
+      - name: Install Linux GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libx11-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libasound2-dev
+
+      - name: cargo check
+        run: cargo check --all-targets

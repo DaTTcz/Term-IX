@@ -16,6 +16,8 @@ pub use config::AppPaths;
 pub use error::CoreError;
 pub use module::{ConnectionContext, ProtocolModule};
 pub use registry::ModuleRegistry;
-pub use session::{AuthMethod, Protocol, Session};
+pub use session::{
+    AuthMethod, Protocol, SerialDataBits, SerialFlowControl, SerialParity, SerialStopBits, Session,
+};
 
 pub type Result<T> = std::result::Result<T, CoreError>;

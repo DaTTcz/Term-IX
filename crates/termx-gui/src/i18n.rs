@@ -76,6 +76,35 @@ pub struct Strings {
     pub field_key_path: &'static str,
     pub btn_choose_key_file: &'static str,
     pub field_key_passphrase: &'static str,
+    /// Label radku pro volitelny terminal type (`Session::term_type`) -
+    /// viz `show_new_session_dialog`/`show_edit_session_dialog`.
+    pub field_term_type: &'static str,
+    /// Label radku s prepinacem protokolu (SSH/seriovy port) ve
+    /// formularich Novy/Upravit server - viz `Protocol` a pozadavek
+    /// "Připojení přes COM/sériový port jako další 'plugin'".
+    pub field_protocol: &'static str,
+    pub protocol_ssh: &'static str,
+    pub protocol_serial: &'static str,
+    /// Label pole "Port:" v seriovem rezimu (`Protocol::Serial`) - stejne
+    /// textove pole jako `field_host` (viz `Session::serial_baud_rate`
+    /// v `termx-core`, proc port nema vlastni pole), jen s jinym labelem
+    /// a napovedou z `termx_serial::available_ports()` misto znamych hostu.
+    pub field_serial_port: &'static str,
+    /// Label pole pro rychlost seriove linky (`Session::serial_baud_rate`) -
+    /// prazdne pole = vychozi `termx_serial::DEFAULT_BAUD_RATE`.
+    pub field_baud_rate: &'static str,
+    /// Zbyle 3 parametry seriove linky - viz `render_serial_config_fields`
+    /// v `app.rs` a pozadavek "chci komplet nastavení portu".
+    pub field_data_bits: &'static str,
+    pub field_parity: &'static str,
+    pub field_stop_bits: &'static str,
+    pub field_flow_control: &'static str,
+    pub parity_none: &'static str,
+    pub parity_odd: &'static str,
+    pub parity_even: &'static str,
+    pub flow_control_none: &'static str,
+    pub flow_control_software: &'static str,
+    pub flow_control_hardware: &'static str,
 
     // -- spolecna tlacitka --
     pub btn_add: &'static str,
@@ -93,6 +122,14 @@ pub struct Strings {
     pub btn_select_all: &'static str,
     pub btn_select_none: &'static str,
     pub btn_open: &'static str,
+    /// Kontextove menu stromu serveru, vedle "Otevřít"/"Otevřít SFTP" -
+    /// vzdy zalozi NOVY tab s vlastnim SSH spojenim pro tuto ulozenou
+    /// session, i kdyz uz pro ni nejaky tab otevreny je (na rozdil od
+    /// `btn_open`, ktery existujici tab jen aktivuje) - viz
+    /// `TreeAction::OpenNewTab`/`MainApp::open_new_session_tab` a
+    /// pozadavek "otevření stejného uloženého přihlášení jako další TAB...
+    /// pro dvě souběžné relace ke stejnému serveru".
+    pub btn_open_new_tab: &'static str,
     pub btn_open_sftp: &'static str,
     pub btn_edit: &'static str,
     pub btn_rename: &'static str,
@@ -337,6 +374,22 @@ pub const CS: Strings = Strings {
     field_key_path: "Soubor klíče:",
     btn_choose_key_file: "Vybrat soubor...",
     field_key_passphrase: "Pasfráze (volitelné):",
+    field_term_type: "Typ terminálu:",
+    field_protocol: "Protokol:",
+    protocol_ssh: "SSH",
+    protocol_serial: "Sériový port (COM)",
+    field_serial_port: "Port:",
+    field_baud_rate: "Rychlost (baud):",
+    field_data_bits: "Datové bity:",
+    field_parity: "Parita:",
+    field_stop_bits: "Stop bity:",
+    field_flow_control: "Řízení toku:",
+    parity_none: "Žádná",
+    parity_odd: "Lichá",
+    parity_even: "Sudá",
+    flow_control_none: "Žádné",
+    flow_control_software: "Softwarové (XON/XOFF)",
+    flow_control_hardware: "Hardwarové (RTS/CTS)",
 
     btn_add: "Přidat",
     btn_save: "Uložit",
@@ -353,6 +406,7 @@ pub const CS: Strings = Strings {
     btn_select_all: "Vybrat vše",
     btn_select_none: "Nic nevybírat",
     btn_open: "Otevřít",
+    btn_open_new_tab: "Otevřít v novém tabu",
     btn_open_sftp: "Otevřít SFTP",
     btn_edit: "Upravit...",
     btn_rename: "Přejmenovat...",
@@ -558,6 +612,22 @@ pub const EN: Strings = Strings {
     field_key_path: "Key file:",
     btn_choose_key_file: "Choose file...",
     field_key_passphrase: "Passphrase (optional):",
+    field_term_type: "Terminal type:",
+    field_protocol: "Protocol:",
+    protocol_ssh: "SSH",
+    protocol_serial: "Serial port (COM)",
+    field_serial_port: "Port:",
+    field_baud_rate: "Baud rate:",
+    field_data_bits: "Data bits:",
+    field_parity: "Parity:",
+    field_stop_bits: "Stop bits:",
+    field_flow_control: "Flow control:",
+    parity_none: "None",
+    parity_odd: "Odd",
+    parity_even: "Even",
+    flow_control_none: "None",
+    flow_control_software: "Software (XON/XOFF)",
+    flow_control_hardware: "Hardware (RTS/CTS)",
 
     btn_add: "Add",
     btn_save: "Save",
@@ -574,6 +644,7 @@ pub const EN: Strings = Strings {
     btn_select_all: "Select all",
     btn_select_none: "Select none",
     btn_open: "Open",
+    btn_open_new_tab: "Open in new tab",
     btn_open_sftp: "Open SFTP",
     btn_edit: "Edit...",
     btn_rename: "Rename...",

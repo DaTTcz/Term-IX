@@ -54,19 +54,14 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::try_init().ok();
     // Bez tohoto volani Windows u DPI-nevedomych aplikaci sam "roztahuje"
     // vykreslene okno podle systemoveho meritka (typicky 125/150/200 %),
-    // takze napr. splash okno vypada 2x vetsi a rozmazane, nez jak bylo
-    // vykresleno. Musi se volat driv, nez se otevre prvni okno.
+    // takze by hlavni okno (vc. uvodni splash animace, ktera v nem bezi
+    // jako prvni faze - viz `termx-gui/src/splash.rs`) vypadalo 2x vetsi
+    // a rozmazane, nez jak bylo vykresleno. Musi se volat driv, nez se
+    // otevre prvni okno.
     #[cfg(target_os = "windows")]
     set_process_dpi_aware();
 
     let cli = Cli::parse();
-
-    if !cli.no_splash {
-        termx_splash::show_splash(termx_splash::SplashInfo {
-            version: env!("CARGO_PKG_VERSION"),
-            author: "DaTTcz",
-        });
-    }
 
     let paths = AppPaths::new()?;
     paths.ensure_dirs()?;
@@ -74,6 +69,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut registry = ModuleRegistry::new();
     registry.register(Arc::new(termx_ssh::SshModule::new()));
+    registry.register(Arc::new(termx_serial::SerialModule::new()));
 
     // GUI (termx-gui, postavene na egui/eframe) si bezi ve vlastni
     // blokujici smycce na aktualnim vlakne - na rozdil od puvodniho TUI
@@ -82,7 +78,10 @@ fn main() -> anyhow::Result<()> {
     // vrstva/moduly samy, az bude vestaveny terminal skutecne pripojeny.
     // Samotne odemceni/vytvoreni trezoru (drive `prompt_master_password`
     // pres cmd konzoli) resi az GUI na uvodni obrazovce po otevreni okna.
-    termx_gui::run_app(vault_path, registry, cli.no_update)
+    // Uvodni splash animace (`--no-splash` nize) uz take bezi primo v
+    // tomto okne (viz `termx_gui::run_app`/`termx-gui/src/splash.rs`),
+    // ne v samostatnem okne pred nim.
+    termx_gui::run_app(vault_path, registry, cli.no_update, !cli.no_splash)
 }
 
 /// Rekne Windows, ze si o vlastni vykreslovani/meritko umime rozhodnout

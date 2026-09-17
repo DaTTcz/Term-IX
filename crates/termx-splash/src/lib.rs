@@ -11,11 +11,16 @@
 //! kurzor par-krat blikne, okno se samo zavre.
 //!
 //! POZNAMKA K OVERENI: podobne jako `termx-ssh`, i tento crate pouziva
-//! zavislosti (`minifb`, `fontdue`), jejichz presne API nebylo mozne v
-//! tomto prostredi overit skutecnym `cargo build` (zadny pristup na
-//! crates.io - viz README). Logika je napsana konzervativne a defenzivne
-//! (viz `try_show_splash`), ale drobne doladeni casovani/zarovnani muze
-//! byt po prvnim spusteni potreba.
+//! zavislosti (`minifb`, `fontdue`, na Linuxu navic `x11-dl`), jejichz
+//! presne API nebylo mozne v tomto prostredi overit skutecnym
+//! `cargo build` (zadny pristup na crates.io - viz README). Logika je
+//! napsana konzervativne a defenzivne (viz `try_show_splash`), ale
+//! drobne doladeni casovani/zarovnani muze byt po prvnim spusteni
+//! potreba. Konkretne `minifb::Window::set_position` (viz
+//! `center_on_linux`) a presne nazvy funkci `x11-dl` (`primary_screen_size`
+//! na Linuxu) stoji za prvni proverit lokalnim `cargo check` - u obou jde
+//! jen o polohu okna, takze i kdyby se nazev/signatura drobne lisily,
+//! jde o par radku na jednom miste.
 //!
 //! DULEZITE: splash je kosmeticky bonus, nikdy nesmi zabranit spusteni
 //! aplikace. Pokud se graficke okno nepodari otevrit (napr. beh pres SSH
@@ -187,6 +192,68 @@ fn primary_screen_size() -> Option<(i32, i32)> {
     }
 }
 
+/// Totez co Windows varianta vyse (rozmery hlavniho monitoru), jen pres
+/// X11 (`x11-dl` - viz Cargo.toml, uz stejne tazeno tranzitivne pres
+/// `minifb`). Pouziva se v `center_on_linux` nize.
+///
+/// POZOR NA WAYLAND: kdyz `minifb` bezi pod cistym Waylandem (zadny X
+/// server/XWayland), `XOpenDisplay` bud selze rovnou (vrati null), nebo
+/// se sice pripoji (kdyz je XWayland aktivni jako kompatibilni vrstva),
+/// ale zjistene rozmery pak nemusi odpovidat realnemu Wayland vystupu.
+/// Vzhledem k tomu, ze samotne umisteni okna (`center_on_linux`) na
+/// Waylandu stejne nejde vynutit (viz tam), neni to prakticky problem -
+/// centrovani se proste jen tise neaplikuje/neprojevi.
+#[cfg(target_os = "linux")]
+fn primary_screen_size() -> Option<(i32, i32)> {
+    use x11_dl::xlib::Xlib;
+
+    let xlib = Xlib::open().ok()?;
+    unsafe {
+        let display = (xlib.XOpenDisplay)(std::ptr::null());
+        if display.is_null() {
+            return None;
+        }
+        let screen = (xlib.XDefaultScreen)(display);
+        let width = (xlib.XDisplayWidth)(display, screen);
+        let height = (xlib.XDisplayHeight)(display, screen);
+        (xlib.XCloseDisplay)(display);
+        if width > 0 && height > 0 {
+            Some((width, height))
+        } else {
+            None
+        }
+    }
+}
+
+/// Vycentruje splash okno na hlavnim monitoru na Linuxu (X11) - protejsek
+/// `force_borderless_and_center` na Windows, jen o poznani skromnejsi:
+/// borderless uz tady resi primo `WindowOptions` (`borderless`/`title`
+/// nize v `try_show_splash`, na X11 na rozdil od Windows funguje spolehlive
+/// samo o sobe), takze staci jen poloha - k tomu uz `minifb::Window` ma
+/// vlastni cross-platformni `set_position`, zadne dalsi Win32-stylove FFI
+/// navic netreba.
+///
+/// Puvodne (pred timto doplnenim) se na Linuxu poloha vubec neresila a
+/// nechala se cele na window manageru - vysledkem bylo, ze se splash pri
+/// kazdem spusteni objevil jinde (podle toho, jak zrovna WM nove okno bez
+/// hintu umistil - typicky pod kurzorem mysi nebo v rohu), coz na obrazovce
+/// pusobilo, jako by "lital" - zpetna vazba, kvuli ktere tahle funkce
+/// vznikla.
+///
+/// Na Waylandu (viz `primary_screen_size` vyse) je tohle cele bez ucinku -
+/// Wayland protokol zamerne nedovoluje klientovi urcit vlastni absolutni
+/// pozici okna (jen kompozitor rozhoduje) - `set_position` tam tise
+/// neudela nic, coz je presne stejne chovani jako pred timto doplnenim.
+#[cfg(target_os = "linux")]
+fn center_on_linux(window: &mut Window, width: usize, height: usize) {
+    let Some((screen_w, screen_h)) = primary_screen_size() else {
+        return;
+    };
+    let x = ((screen_w - width as i32) / 2).max(0);
+    let y = ((screen_h - height as i32) / 2).max(0);
+    window.set_position(x as isize, y as isize);
+}
+
 /// Polomer zaobleni rohu splash okna v pixelech - odvozeny od mensiho
 /// rozmeru okna, aby zaobleni vypadalo primerene i kdyby se
 /// `TARGET_MAX_DIM` v budoucnu zmenil (a ne jen jedno pevne cislo, ktere
@@ -336,11 +403,16 @@ fn try_show_splash(info: &SplashInfo) -> anyhow::Result<()> {
     )?;
 
     // Na Windows natvrdo zajistit borderless (viz komentar u funkce) a
-    // vycentrovat na obrazovce. Na jinych platformach necha aplikace
-    // umisteni na okennim manageru - `borderless`/`title` z
-    // `WindowOptions` vyse tam plati primo.
+    // vycentrovat na obrazovce.
     #[cfg(target_os = "windows")]
     force_borderless_and_center("Term-IX", width as i32, height as i32);
+
+    // Na Linuxu (X11) totez jen pro polohu - viz `center_on_linux`. Na
+    // Waylandu (a kdyby X11 dotaz z nejakeho duvodu selhal) se okno
+    // objevi tam, kam ho umisti kompozitor/window manager, presne jako
+    // pred timto doplnenim.
+    #[cfg(target_os = "linux")]
+    center_on_linux(&mut window, width, height);
 
     let start = Instant::now();
 

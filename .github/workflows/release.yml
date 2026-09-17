@@ -1,16 +1,30 @@
 name: Release
 
-# Spousti se pri vytvoreni tagu ve tvaru "vX.Y.Z" (napr. v0.1.0).
-# Zabuildi term-ix pro Windows i Linux a nahraje binarky do GitHub Release
-# pod nazvy obsahujicimi target triple - presne to, co pri startu hleda
-# self-update modul (crates/termx-update) pres crate `self_update`.
+# Spousti se pri vytvoreni tagu ve tvaru "vX.Y.Z" (napr. v0.4.0), nebo
+# rucne (workflow_dispatch). Zabuildi term-ix pro Windows i Linux a
+# nahraje binarky do GitHub Release pod nazvy obsahujicimi cely target
+# triple - presne to, co pri startu hleda self-update modul
+# (crates/termx-update) pres crate `self_update`.
+#
+# Sjednoceno s obdobnym workflow v eR-Commanderu
+# (https://github.com/DaTTcz/eR-Commander, `.github/workflows/release.yml`) -
+# stejna struktura (samostatny "build" job pro kazdou platformu +
+# navazujici "release" job, ktery vsechny artefakty stahne a az pak
+# vytvori jedno GitHub Release), stejna sada systemovych -dev knihoven
+# jako v `ci.yml` tady. Nazvy vyslednych souboru zustavaji beze zmeny
+# oproti puvodni verzi tohoto souboru (`term-ix-<target>.zip`/`.tar.gz`),
+# takze self-update zustava kompatibilni.
 on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch: {}
 
 permissions:
   contents: write
+
+env:
+  BIN_NAME: term-ix
 
 jobs:
   build:
@@ -20,56 +34,98 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive_ext: zip
+            artifact: windows-x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive_ext: tar.gz
+            artifact: linux-x86_64
 
     runs-on: ${{ matrix.os }}
+
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # Systemove -dev knihovny potrebne k SLINKOVANI eframe/egui (glow +
-      # winit, X11 backend) na ubuntu-latest bezerou - na rozdil od
-      # Windows tu nejsou vestavene v runneru. Presne tato sada je
-      # osvedcena/pouzivana primo oficialnim CI projektu egui/eframe
-      # (emilk/egui) - `libssl-dev`/`libgtk-3-dev` navic pro jistotu, i
-      # kdyz nas `rfd` (0.15, vychozi "xdg-portal" backend) je uz sam o
-      # sobe na GTK3 nezavisly.
-      - name: Nainstalovat systemove zavislosti (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev libssl-dev libgtk-3-dev
-
-      - name: Nainstalovat Rust toolchain
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build (release)
-        run: cargo build --release --locked --target ${{ matrix.target }} --bin term-ix
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
-      - name: Zabalit (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $dest = "term-ix-${{ matrix.target }}.zip"
-          Compress-Archive -Path "target/${{ matrix.target }}/release/term-ix.exe" -DestinationPath $dest
-          echo "ASSET=$dest" >> $env:GITHUB_ENV
-
-      - name: Zabalit (Linux)
+      # Stejna sada jako v `ci.yml` (a v eR-Commanderu) - viz komentar
+      # tam.
+      - name: Install Linux GUI build dependencies
         if: runner.os == 'Linux'
         run: |
-          asset="term-ix-${{ matrix.target }}.tar.gz"
-          tar -C "target/${{ matrix.target }}/release" -czf "$asset" term-ix
-          echo "ASSET=$asset" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libx11-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libasound2-dev
 
-      - name: Nahrat do GitHub Release
-        uses: softprops/action-gh-release@v3
+      # --locked: builduj presne podle commitnuteho Cargo.lock - zadne
+      # "tise jina verze zavislosti".
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin term-ix
+
+      # Nazev souboru MUSI obsahovat cely target triple - podle nej hleda
+      # spravny asset self-update kod (crates/termx-update).
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}.exe" "dist/"
+          cd dist
+          7z a "${BIN_NAME}-${{ matrix.target }}.zip" "${BIN_NAME}.exe"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}" "dist/"
+          chmod +x "dist/${BIN_NAME}"
+          cd dist
+          tar -czf "${BIN_NAME}-${{ matrix.target }}.tar.gz" "${BIN_NAME}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: ${{ env.ASSET }}
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
           draft: false
           generate_release_notes: true
