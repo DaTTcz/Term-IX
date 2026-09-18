@@ -1270,6 +1270,11 @@ struct MainApp {
     /// `start_update_install`) - obdoba `update_rx`, jen pro instalaci
     /// misto pouhe kontroly.
     install_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// Cesta k VLASTNI (aktualne bezici) binarce, zjistena JEDNOU hned
+    /// pri startu (`std::env::current_exe()` v `new`/`new_guest`) - viz
+    /// `restart_into_new_version`, proc se NESMI zjistovat znovu az TAM
+    /// (po dokoncene `self_update` instalaci).
+    own_exe_path: Option<PathBuf>,
 
     status_message: Option<String>,
     /// Dialog "O programu" (`show_about_dialog`) - na rozdil od
@@ -1331,6 +1336,7 @@ impl MainApp {
             update_rx: None,
             update_install: UpdateInstall::NotStarted,
             install_rx: None,
+            own_exe_path: std::env::current_exe().ok(),
             status_message: None,
             about_dialog_open: false,
             split_marks: Vec::new(),
@@ -1382,6 +1388,7 @@ impl MainApp {
             update_rx: None,
             update_install: UpdateInstall::NotStarted,
             install_rx: None,
+            own_exe_path: std::env::current_exe().ok(),
             status_message: None,
             about_dialog_open: false,
             split_marks: Vec::new(),
@@ -2204,8 +2211,31 @@ impl MainApp {
     /// nize), takze kdyby uzivatel tesne pred restartem zmenil napr.
     /// nastaveni (tema, velikost pisma, polohu okna), tato zmena by se
     /// nestihla ulozit a po restartu by byla ztracena.
+    ///
+    /// OPRAVA (zpetna vazba "stáhne se nová verze, objeví se tlačítko
+    /// spustit novou verzi ale místo to se jen zavře"): PUVODNE se tu
+    /// cesta k vlastni binarce zjistovala AZ TADY, primo pri kliku,
+    /// pres cerstve volane `std::env::current_exe()`. Jenze na Linuxu
+    /// (a obdobne na macOS) `self_update` nahrazuje bezici binarku
+    /// atomickym `rename(2)` PRES puvodni soubor - jadro ale kvuli
+    /// tomu povazuje PUVODNI inode (ten, ktery tento uz bezici proces
+    /// ma sam otevreny/namapovany) za SMAZANY (nema uz zadne jmeno v
+    /// adresari). `std::env::current_exe()` na Linuxu cte symlink
+    /// `/proc/self/exe`, ktery pak misto cisteho pathu ukazuje na
+    /// "<puvodni_cesta> (deleted)" - takovou cestu uz `Command::new`
+    /// nespusti (tise selze, viz `let _ = ...` nize), takze se appka
+    /// jen zavrela a novou verzi nikdo nespustil.
+    ///
+    /// OPRAVENO: cesta se ted misto toho bere z `self.own_exe_path`,
+    /// ktery se zjistil (a nakesoval) JEDNOU uz pri startu (viz
+    /// `MainApp::new`/`new_guest`) - tedy DAVNO pred jakymkoliv
+    /// `self_update`, kdy `/proc/self/exe` jeste ukazovalo cistou
+    /// cestu bez "(deleted)". Samotny RETEZEC te cesty (ne uz konkretni
+    /// inode) po `self_update` spravne ukazuje na NOVY soubor (`rename`
+    /// prepsal polozku v adresari), takze spusteni pres tuto cestu uz
+    /// funguje.
     fn restart_into_new_version(&self, ctx: &egui::Context) {
-        if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe) = &self.own_exe_path {
             // Nova binarka uz na tomto miste lezi (viz vyse) - kdyby se
             // presto spusteni nezdarilo (napr. soubor mezitim smazan
             // antivirem), nezbyva nez to tise vzdat; uzivatel muze
@@ -4069,10 +4099,144 @@ impl MainApp {
             return;
         }
 
+        self.render_open_tabs_list(ui);
+
         let tree = build_tree(&self.vault.data);
         egui::ScrollArea::vertical().show(ui, |ui| {
             self.render_folder_contents(ui, &tree, "");
         });
+    }
+
+    /// Svisly seznam AKTUALNE OTEVRENYCH tabu v levem panelu, nad
+    /// stromem ulozenych serveru - viz `claude/roadmap-ideas.md` bod 2
+    /// ("Postranni lista pro navigaci mezi otevrenymi taby"). Vodorovna
+    /// `tab_bar` nad obsahem se pri hodne otevrenych tabech zacne lamat
+    /// na vice radku a byt hur klikatelna - tenhle seznam nabizi
+    /// alternativni, svisle (a tedy skrolovatelne diky obalujici
+    /// `ScrollArea` v `show_tree`) razeni se stejnym vyznamem (klik na
+    /// nazev = vybrat tab, "X" = zavrit tab, cervena teckou oznaceny
+    /// "mrtve" odpojene spojeni - stejne jako v `tab_bar`).
+    ///
+    /// Zobrazuje se jen kdyz je otevreny vic nez jeden tab (samotny
+    /// Home by tu nemel smysl) a je sbalitelny (`CollapsingHeader`),
+    /// aby uzivateli, ktery preferuje jen vodorovnou listu, zbytecne
+    /// nezabiral misto v panelu.
+    ///
+    /// Vlastni (mensi) implementace vyberu/zavirani tabu, NE sdilena s
+    /// `tab_bar` - vodorovna lista uz je overene funkcni a rucne
+    /// otestovana uzivatelem, takze se schvalne neprovadi rizikovy
+    /// refaktoring/sdruzovani spolecne logiky do jednoho mista.
+    fn render_open_tabs_list(&mut self, ui: &mut egui::Ui) {
+        if self.tabs.len() <= 1 {
+            return;
+        }
+        let tr = i18n::t(self.settings.lang);
+        let snapshot: Vec<TabKind> = self.tabs.clone();
+
+        egui::CollapsingHeader::new(tr.open_tabs_heading).default_open(true).show(ui, |ui| {
+            let mut to_select = None;
+            let mut to_close = None;
+            let mut to_confirm_close: Option<CloseTabConfirm> = None;
+
+            for (idx, &kind) in snapshot.iter().enumerate() {
+                let selected = idx == self.active_tab;
+                let title = self.tab_title(kind);
+
+                // Stejny zpusob zjisteni "mrtveho" (odpojeneho) a
+                // "ziveho" (pripojeneho) spojeni jako v `tab_bar` - viz
+                // tam pro podrobnejsi vysvetleni obou `match`u.
+                let conn_state = match kind {
+                    TabKind::Connection { tab_id, .. } => self.terminal_sessions.get(&tab_id).map(|s| s.state()),
+                    _ => None,
+                };
+                let sftp_state = match kind {
+                    TabKind::Sftp(id) => self.sftp_sessions.get(&id).map(|s| s.state()),
+                    _ => None,
+                };
+                let is_dead = conn_state == Some(terminal::ConnState::Disconnected)
+                    || sftp_state == Some(sftp_browser::SftpState::Disconnected);
+                let is_live = conn_state == Some(terminal::ConnState::Connected)
+                    || sftp_state == Some(sftp_browser::SftpState::Connected);
+
+                ui.horizontal(|ui| {
+                    // Mensi mezera nez vychozi mezi teckou/nazvem/"X".
+                    ui.spacing_mut().item_spacing.x = 4.0;
+
+                    if is_dead {
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(8.0, ui.spacing().interact_size.y), egui::Sense::hover());
+                        ui.painter().circle_filled(rect.center(), 4.0, theme::DANGER);
+                    }
+
+                    // Sirka vyhrazena pro "X" (jen u ne-Home tabu) je
+                    // PEVNA konstanta - musi byt znama uz PRED
+                    // vykreslenim radku vlevo (nize), aby ten mohl
+                    // spocitat presne tolik mista, kolik mu ma zbyt, a
+                    // "X" tak u VSECH radku skoncilo na stejne
+                    // (zarovnane) pozici u praveho okraje panelu, bez
+                    // ohledu na delku nazvu tabu - zpetna vazba
+                    // "zarovnal bych to k délce toho panelu a křížky
+                    // dal úplně doprava".
+                    let close_reserved = if matches!(kind, TabKind::Home) { 0.0 } else { 24.0 };
+                    let row_width = (ui.available_width() - close_reserved).max(0.0);
+                    let row_height = ui.spacing().interact_size.y;
+                    let (row_rect, row_resp) =
+                        ui.allocate_exact_size(egui::vec2(row_width, row_height), egui::Sense::click());
+
+                    // Rucne vykresleny radek (misto `selectable_label`,
+                    // ktery by v takhle vynucene sirce text VYCENTROVAL -
+                    // presne to zpusobilo puvodni zpetnou vazbu "je to
+                    // zbytečně dlouhé", kdyz radek zabiral celou sirku
+                    // panelu, ale text byl vprostred): zvyrazneni pozadi
+                    // pres celou `row_width` (stejny vzhled jako
+                    // `ui.style().interact_selectable` pouziva
+                    // `selectable_label`/`tab_bar` jinde v aplikaci), text
+                    // VZDY zarovnany doleva a oriznuty na `row_rect`, aby
+                    // dlouhy nazev serveru nezajel pres "X" napravo.
+                    if ui.is_rect_visible(row_rect) {
+                        let visuals = ui.style().interact_selectable(&row_resp, selected);
+                        if selected || row_resp.hovered() {
+                            ui.painter().rect(row_rect.expand(visuals.expansion), visuals.rounding, visuals.weak_bg_fill, visuals.bg_stroke);
+                        }
+                        let galley = ui.painter().layout_no_wrap(title.clone(), egui::TextStyle::Button.resolve(ui.style()), visuals.text_color());
+                        let text_pos = egui::pos2(
+                            row_rect.min.x + ui.spacing().button_padding.x,
+                            row_rect.center().y - galley.size().y * 0.5,
+                        );
+                        ui.painter().with_clip_rect(row_rect).galley(text_pos, galley, visuals.text_color());
+                    }
+                    if row_resp.clicked() {
+                        to_select = Some(idx);
+                    }
+
+                    if !matches!(kind, TabKind::Home) && ui.small_button("X").clicked() {
+                        if is_live {
+                            to_confirm_close = Some(CloseTabConfirm { idx, title: title.clone() });
+                        } else {
+                            to_close = Some(idx);
+                        }
+                    }
+                });
+            }
+
+            if let Some(idx) = to_select {
+                self.active_tab = idx;
+                // Stejna synchronizace `split_focus` jako v `tab_bar` -
+                // viz tam pro vysvetleni ("kliknutí na záložku TABu
+                // sice rožne barvu ale nezaktivní daný terminál").
+                if self.split_marks.len() == 2 {
+                    if let Some(pos) = self.split_marks.iter().position(|&k| k == snapshot[idx]) {
+                        self.set_split_focus(pos);
+                    }
+                }
+            }
+            if let Some(confirm) = to_confirm_close {
+                self.close_tab_confirm = Some(confirm);
+            } else if let Some(idx) = to_close {
+                self.close_tab(idx);
+            }
+        });
+        ui.separator();
     }
 
     /// Prihlasovaci formular zobrazeny v levem panelu misto stromu
@@ -4476,6 +4640,22 @@ const FOCUS_ATTEMPT_BUDGET: u32 = 90;
 /// prvni pozadavek na fokus, viz tam).
 const RESIZE_ATTEMPT_BUDGET: u32 = 90;
 
+/// Pocet snimku, po ktere okno pri `show_splash` zustava schovane (viz
+/// `lib.rs::run_app`/`with_visible` a `TermxApp::window_reveal_countdown`),
+/// nez se znovu zviditelni.
+///
+/// Puvodne tu bylo jen par snimku (3) - to ale nestacilo (na X11/Cinnamonu
+/// bylo pri odhaleni okno porad jeste chvilku videt na stare
+/// (`persist_window`-obnovene) pozici, nez ji prepsalo vlastni
+/// zmenseni/vycentrovani, viz `shrink_to_splash_window`). Hodnota je proto
+/// zvysena na radove desitky snimku (podobne jako `RESIZE_ATTEMPT_BUDGET`),
+/// aby WM/kompozitor mel realisticky cas zpracovat prvni davku
+/// pozadavku na zmenseni/vycentrovani jeste PRED tim, nez se okno vubec
+/// ukaze - i za cenu, ze samotne zviditelneni bude o zlomek sekundy
+/// pozdejsi (na rozdil od "zablesku na spatnem miste" uz by to melo byt
+/// oproti tomu nepostrehnutelne).
+const WINDOW_REVEAL_DELAY_FRAMES: u32 = 24;
+
 /// Jaka zmena velikosti/stavu okna se ma prave (opakovane, viz
 /// `TermxApp::resize_attempts`) prosazovat - viz `TermxApp::update`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -4581,6 +4761,13 @@ pub struct TermxApp {
     /// Jaka zmena velikosti/stavu okna prave (opakovane, dokud
     /// `resize_attempts > 0`) probiha - viz [`PendingResize`] a `update`.
     pending_resize: PendingResize,
+    /// Pocitadlo snimku do opetovneho zviditelneni okna - viz
+    /// `lib.rs::run_app`/`with_visible` (okno se pri `show_splash`
+    /// vytvori schovane, aby nebyl videt kratky "zablesk" na stare
+    /// pozici z `persist_window`, driv nez ji prepise nas vlastni
+    /// zmenseni/vycentrovani). `0` znamena, ze uz je okno viditelne
+    /// (bud od zacatku, nebo uz bylo zviditelneno) - viz `update`.
+    window_reveal_countdown: u32,
     /// Prepnuto z `--no-update` (viz `main.rs`) - preda se do
     /// [`MainApp::new`]/[`MainApp::new_guest`], ktere podle toho
     /// nastavi pocatecni `UpdateCheck::Disabled` misto `NotStarted`
@@ -4628,8 +4815,28 @@ impl TermxApp {
             // UPLNE PRVNI spusteni, kdy jeste neni co obnovovat) - presne
             // tohle zpusobovalo zpetnou vazbu "splash okno je porad
             // velke".
+            //
+            // POZNAMKA K WAYLANDU: na Waylandu (konkretne pozorovano pod
+            // Cinnamonem/Muffinem) se tenhle mechanismus chova
+            // nespolehive/nekonzistentne (splash konci ruzne, nekdy v
+            // rohu, nekdy jinde) - vyzkousela se rada alternativnich
+            // pristupu (viz historie v komentarich u `shrink_to_splash_window`
+            // a `RESIZE_ATTEMPT_BUDGET`), zadny ale nedal spolehlive
+            // MALE A SOUCASNE vystredene okno. Na vyslovne zadost bylo
+            // rozhodnuto tohle na Waylandu prozatim NErozlisovat zvlast
+            // a nechat stejny (jednoduchy, spolehlivy na X11/Windows)
+            // kod bezet vsude - na Waylandu tedy splash muze vypadat
+            // "podivne" (umisteni/velikost nemusi presne sedet), dokud
+            // se to samo nezlepsi na strane Cinnamonu/Muffinu (viz i
+            // `is_wayland_session` pro souvisejici, uz vyresenou cast s
+            // pozici - `OuterPosition` tam zustava vypnuta, protoze na
+            // Waylandu stejne nefunguje vubec).
             pending_resize: if show_splash { PendingResize::ToSplash } else { PendingResize::None },
             resize_attempts: if show_splash { RESIZE_ATTEMPT_BUDGET } else { 0 },
+            // Okno je schovane (viz `lib.rs::run_app`/`with_visible`)
+            // jen kdyz `show_splash` - jinak zadne dalsi zviditelnovani
+            // netreba (`0`).
+            window_reveal_countdown: if show_splash { WINDOW_REVEAL_DELAY_FRAMES } else { 0 },
             skip_update_check,
         }
     }
@@ -4838,8 +5045,21 @@ impl eframe::App for TermxApp {
             if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
                 self.window_size = Some([rect.width(), rect.height()]);
             }
-            if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
-                self.window_pos = Some([rect.min.x, rect.min.y]);
+            // Poloha okna (`outer_rect`/`OuterPosition`) je na Waylandu
+            // (na rozdil od X11/Windows) principielne nedostupna - protokol
+            // z bezpecnostnich duvodu klientum vubec nesdeluje jejich
+            // absolutni pozici na obrazovce (o umisteni oken rozhoduje
+            // vyhradne compositor), takze `outer_rect` tam bud vraci
+            // `None`, nebo nesmyslnou/vzdy stejnou hodnotu - zpetna vazba
+            // "na Waylandu si aplikace nepamatuje pozici". Sledovani
+            // polohy proto na Waylandu vubec nezkousime (viz
+            // `is_wayland_session` nize) a necháváme `window_pos` na
+            // `None` - `resize_to_main_window` v tom pripade necha okno
+            // umistit compositor (viz tam).
+            if !is_wayland_session() {
+                if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
+                    self.window_pos = Some([rect.min.x, rect.min.y]);
+                }
             }
         }
 
@@ -4862,6 +5082,19 @@ impl eframe::App for TermxApp {
             }
             ctx.request_repaint();
             self.resize_attempts -= 1;
+        }
+
+        // Opetovne zviditelneni okna (viz `lib.rs::run_app`/`with_visible`
+        // a `window_reveal_countdown` vyse) - musi bezet AZ PO bloku
+        // vyse (aby prvni pozadavky na zmenseni/vycentrovani uz stihly
+        // odejit predtim, nez se okno vubec ukaze), ale porad jeste PRED
+        // rozlisenim stavu nize (stejny duvod jako u bloku vyse).
+        if self.window_reveal_countdown > 0 {
+            self.window_reveal_countdown -= 1;
+            if self.window_reveal_countdown == 0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            }
+            ctx.request_repaint();
         }
 
         // Rozliseni pres `matches!` PRED praci se stavem (stejny vzor jako
@@ -4954,6 +5187,15 @@ impl eframe::App for TermxApp {
 /// zaroven nebyla znama ani `restore_pos`, zvetseni okna se provede, jen
 /// se nedopocitava nova poloha - okno pak zustane tam, kde bylo (typicky
 /// levy horni roh), coz je jen kosmeticka vada, ne funkcni problem.
+///
+/// NA WAYLANDU (viz `is_wayland_session`) se `OuterPosition` (rucni
+/// centrovani i obnoveni ulozene polohy) VUBEC neposila - `restore_pos`
+/// tam ostatne ani nikdy neni znama (viz `TermxApp::update`), protoze
+/// Wayland klientum neumoznuje ani zjistit, ani nastavit absolutni
+/// pozici okna na obrazovce (o umisteni rozhoduje vyhradne compositor,
+/// je to zamerne dane protokolem, ne chyba/omezeni teto aplikace) -
+/// zpetna vazba "na Waylandu nefunguje vystredeni a nepamatuje si
+/// pozici". Okno tam proto zustava tam, kam ho umisti compositor.
 fn resize_to_main_window(ctx: &egui::Context, restore_size: Option<[f32; 2]>, restore_pos: Option<[f32; 2]>) {
     // Nejdriv vratit normalni minimalni velikost (`crate::MAIN_MIN_WINDOW_SIZE`)
     // - behem splash faze byla docasne zmensena na `splash::WINDOW_SIZE`
@@ -4963,17 +5205,21 @@ fn resize_to_main_window(ctx: &egui::Context, restore_size: Option<[f32; 2]>, re
     ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(crate::MAIN_MIN_WINDOW_SIZE.into()));
     let size = egui::Vec2::from(restore_size.unwrap_or(crate::MAIN_WINDOW_SIZE));
     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-    if let Some(pos) = restore_pos {
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::Pos2::from(pos)));
-    } else if let Some(monitor_size) = ctx.input(|i| i.viewport().monitor_size) {
-        let pos = egui::pos2(((monitor_size.x - size.x) / 2.0).max(0.0), ((monitor_size.y - size.y) / 2.0).max(0.0));
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+    if !is_wayland_session() {
+        if let Some(pos) = restore_pos {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::Pos2::from(pos)));
+        } else if let Some(monitor_size) = ctx.input(|i| i.viewport().monitor_size) {
+            let pos = egui::pos2(((monitor_size.x - size.x) / 2.0).max(0.0), ((monitor_size.y - size.y) / 2.0).max(0.0));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+        }
     }
 }
 
 /// Zmensi okno na malou "splash" velikost (`splash::WINDOW_SIZE`) a
-/// vycentruje ho - opakovane volano hned od startu, kdyz `show_splash ==
-/// true` (viz `PendingResize::ToSplash`, nastaveno v `TermxApp::new`).
+/// vycentruje ho (viz `is_wayland_session` - na Waylandu se centrovani
+/// preskakuje, tam to stejne nejde) - opakovane volano hned od startu,
+/// kdyz `show_splash == true` (viz `PendingResize::ToSplash`, nastaveno
+/// v `TermxApp::new`).
 ///
 /// DUVOD: `NativeOptions` v `lib.rs::run_app` sice pro tento pripad uz
 /// pocita s malou pocatecni velikosti (`initial_size`/`initial_min_size`
@@ -4986,12 +5232,41 @@ fn resize_to_main_window(ctx: &egui::Context, restore_size: Option<[f32; 2]>, re
 /// Explicitnim (a opakovanym, viz `RESIZE_ATTEMPT_BUDGET`) pozadavkem
 /// hned po vytvoreni okna se tato prebita velikost vynuceně prepise zpet
 /// na malou.
+///
+/// POZNAMKA K WAYLANDU: umisteni/velikost takhle zmenseneho okna se na
+/// Waylandu (Cinnamon/Muffin) chova nespolehlive/nekonzistentne, i po
+/// vyzkouseni ruznych alternativnich pristupu - zamerne se to zatim
+/// dal neresi (viz poznamka u `lib.rs::run_app`/`initial_size`).
 fn shrink_to_splash_window(ctx: &egui::Context) {
     let size = egui::Vec2::from(splash::WINDOW_SIZE);
     ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(size));
     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-    if let Some(monitor_size) = ctx.input(|i| i.viewport().monitor_size) {
-        let pos = egui::pos2(((monitor_size.x - size.x) / 2.0).max(0.0), ((monitor_size.y - size.y) / 2.0).max(0.0));
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+    // Na Waylandu `OuterPosition` neni podporovane (viz `is_wayland_session`
+    // a komentar u `resize_to_main_window`) - splash okno tam proto necháme
+    // umistit compositor misto marneho pokusu o rucni vycentrovani.
+    if !is_wayland_session() {
+        if let Some(monitor_size) = ctx.input(|i| i.viewport().monitor_size) {
+            let pos = egui::pos2(((monitor_size.x - size.x) / 2.0).max(0.0), ((monitor_size.y - size.y) / 2.0).max(0.0));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+        }
     }
+}
+
+/// Bezi tato aplikace pod Waylandem (na rozdil od X11/XWayland, nebo
+/// Windows/macOS)? Zjistuje se stejnym zpusobem, jaky pouziva vetsina
+/// linuxovych GUI aplikaci/nastroju (napr. i samotny winit interne) -
+/// pritomnosti standardni promenne prostredi `WAYLAND_DISPLAY`, kterou
+/// nastavuje Wayland compositor pro kazdou Wayland relaci. Na
+/// X11/Windows/macOS je tato promenna nenastavena, takze tam funkce
+/// vraci `false` a chovani zustava beze zmeny.
+///
+/// DUVOD: Wayland (na rozdil od X11) klientum z principu vubec
+/// nedovoluje zjistit ani nastavit absolutni pozici okna na obrazovce -
+/// `ViewportCommand::OuterPosition` i cteni polohy z `outer_rect` proto
+/// na Waylandu bud nic nedela, nebo vraci nesmyslnou hodnotu. Volani
+/// obojiho se tam proto rovnou preskakuje (viz volajici), aby se
+/// zbytecne neukladala/nepouzivala nefunkcni "poloha" a aby se nemarnily
+/// pozadavky na centrovani, ktere compositor stejne ignoruje.
+fn is_wayland_session() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
 }

@@ -103,6 +103,15 @@ pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry, skip_update_check:
     // by jinak (viz komentar u `MAIN_MIN_WINDOW_SIZE`) vynutil aspon
     // 760x440 uz na prvnim snimku, bez ohledu na to, jak malou
     // `initial_size` pozadujeme.
+    //
+    // POZNAMKA K WAYLANDU: umisteni/velikost tohohle maleho splash okna
+    // se na Waylandu (pozorovano na Cinnamon/Muffin) chova nespolehlive/
+    // nekonzistentne navzdory ruznym vyzkousenym pristupum (viz historie
+    // v `app.rs` u `PendingResize::ToSplash`/`shrink_to_splash_window`) -
+    // zamerne se to dal neresi a nechava se to spolecne (jednoduche)
+    // chovani pro vsechny platformy, na Waylandu tedy splash muze
+    // pusobit "podivne", dokud se situace nezlepsi na strane
+    // Cinnamonu/Muffinu.
     let (initial_size, initial_min_size): ([f32; 2], [f32; 2]) =
         if show_splash { (splash::WINDOW_SIZE, splash::WINDOW_SIZE) } else { (MAIN_WINDOW_SIZE, MAIN_MIN_WINDOW_SIZE) };
 
@@ -110,6 +119,23 @@ pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry, skip_update_check:
         viewport: egui::ViewportBuilder::default()
             .with_inner_size(initial_size)
             .with_min_inner_size(initial_min_size)
+            // Kdyz se ma zobrazit splash (`show_splash`), okno pri
+            // vytvoreni ZUSTANE SCHOVANE (neviditelne) - `app.rs` ho
+            // po `WINDOW_REVEAL_DELAY_FRAMES` snimcich, az uz jsou
+            // pozadavky na zmenseni/vycentrovani (viz
+            // `shrink_to_splash_window`) skutecne odeslane, zase
+            // zviditelni (`egui::ViewportCommand::Visible(true)`, viz
+            // `app::TermxApp::update`/`window_reveal_countdown`).
+            // DUVOD: `persist_window` (nize) na X11 chvilku obnovuje
+            // POLOHU z minuleho spusteni, driv nez ji nas vlastni kod
+            // prepise na vycentrovanou - bez schovani okna byl kratce
+            // viditelny "zablesk" na te stare pozici, nez se okno
+            // presunulo doprostred. OVERENO uzivatelem na X11/Cinnamonu:
+            // se schovanim a dostatecne dlouhym `WINDOW_REVEAL_DELAY_FRAMES`
+            // uz zablesk videt neni. Kdyz `show_splash == false`, okno
+            // je viditelne rovnou (zadne dalsi prepocitavani polohy v
+            // `app.rs` v tom pripade neprobiha).
+            .with_visible(!show_splash)
             .with_icon(load_icon())
             // Wayland (napr. GNOME): bez shodneho app_id se ikonka v
             // panelu/doku nezobrazi vubec, i kdyz jsou `.desktop` soubor
@@ -127,8 +153,11 @@ pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry, skip_update_check:
         // vycentruje na obrazovce. `persist_window` pak pri kazdem
         // dalsim spusteni (diky cargo feature "persistence" u eframe)
         // obnovi presne tu polohu a velikost, ve ktere uzivatel okno
-        // naposledy zavrel - vlastni ukladaci/nacitaci logika k tomu
-        // netreba, o to se stara primo eframe.
+        // naposledy zavrel - na X11/Windows spolehlive; na Waylandu se
+        // to (spolu s dalsimi souvisejicimi drobnostmi - viz
+        // `app::AppSettings::window_size`/`window_pos`/`is_wayland_session`)
+        // chova hur, ale zamerne se to prozatim neresi zvlast (viz
+        // poznamka u `initial_size` vyse).
         centered: true,
         persist_window: true,
         ..Default::default()

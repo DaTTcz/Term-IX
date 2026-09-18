@@ -233,6 +233,11 @@ pub struct Strings {
     /// Hlaska (`status_message`) pri pokusu oznacit treti tab, kdyz uz
     /// jsou 2 jine oznacene (viz `toggle_split_mark`).
     pub split_view_full: &'static str,
+    /// Nadpis sbalitelne sekce se svislym seznamem AKTUALNE OTEVRENYCH
+    /// tabu v levem panelu (`MainApp::render_open_tabs_list`) - viz
+    /// `claude/roadmap-ideas.md` bod 2. Zobrazuje se jen kdyz je
+    /// otevreny vic nez jeden tab.
+    pub open_tabs_heading: &'static str,
 
     // -- dialog: Novy/Upravit server --
     pub dialog_new_server_title: &'static str,
@@ -481,6 +486,7 @@ pub const CS: Strings = Strings {
     btn_split_mark: "Zobrazit vedle jiného tabu (rozdělené zobrazení)",
     btn_split_unmark: "Zrušit rozdělené zobrazení",
     split_view_full: "Pro rozdělené zobrazení jsou už označené 2 taby - nejdřív jeden z nich odznačte.",
+    open_tabs_heading: "Aktuálně otevřené",
 
     dialog_new_server_title: "Nový server",
     dialog_edit_server_title: "Upravit server",
@@ -719,6 +725,7 @@ pub const EN: Strings = Strings {
     btn_split_mark: "Show side by side with another tab (split view)",
     btn_split_unmark: "Turn off split view",
     split_view_full: "2 tabs are already marked for split view - unmark one of them first.",
+    open_tabs_heading: "Currently open",
 
     dialog_new_server_title: "New server",
     dialog_edit_server_title: "Edit server",

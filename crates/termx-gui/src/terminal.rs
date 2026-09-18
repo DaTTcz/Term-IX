@@ -442,6 +442,31 @@ impl Selection {
     }
 }
 
+/// Trida znaku pro urceni hranic "slova" pri dvojkliku - viz
+/// `TerminalSession::word_bounds_at`/`handle_selection_input`. Bezny vzor
+/// beznych terminalu (xterm, gnome-terminal, ...): alfanumericke znaky
+/// (+ podtrzitko) tvori "slovo", souvisly usek bilych znaku dalsi tridu a
+/// souvisly usek ostatnich znaku (interpunkce/symboly, napr. "://", "-",
+/// "@") jeste dalsi - dvojklik pak oznaci cely souvisly usek STEJNE tridy
+/// kolem klikleho znaku (klik primo na mezeru tak oznaci celou souvislou
+/// mezeru, klik na oddelovac jako "/" oznaci sousedici oddelovace).
+#[derive(PartialEq, Eq)]
+enum CharClass {
+    Word,
+    Space,
+    Punct,
+}
+
+fn char_class(c: char) -> CharClass {
+    if c == '\0' || c.is_whitespace() {
+        CharClass::Space
+    } else if c.is_alphanumeric() || c == '_' {
+        CharClass::Word
+    } else {
+        CharClass::Punct
+    }
+}
+
 /// Bezici spojeni napojene na `TerminalSession::term` - SSH
 /// (`termx_ssh::SshHandle`) nebo seriovy/COM port (`termx_serial::SerialHandle`),
 /// podle `Session::protocol` (viz `TerminalSession::new`/`reconnect`).
@@ -1161,6 +1186,35 @@ impl TerminalSession {
         (visual_row as i32 - display_offset, col)
     }
 
+    /// Najde hranice "slova" (viz [`CharClass`]/`char_class`) na
+    /// (ABSOLUTNIM, viz `Selection`) radku `row` mrizky kolem sloupce
+    /// `col` a vrati (pocatecni, koncovy) sloupec oznaceni (oba vcetne) -
+    /// pouzito dvojklikem (viz `handle_selection_input`). Kdyz je mrizka
+    /// prazdna (`cols() == 0`), vrati proste `(col, col)` - v praxi by
+    /// nemelo nastat, jen pojistka.
+    fn word_bounds_at(&self, row: i32, col: usize) -> (usize, usize) {
+        let grid = self.term.grid();
+        let cols = grid.columns();
+        if cols == 0 {
+            return (col, col);
+        }
+        let col = col.min(cols - 1);
+        let char_at = |c: usize| -> char {
+            let ch = grid[Point::new(Line(row), Column(c))].c;
+            if ch == '\0' { ' ' } else { ch }
+        };
+        let target = char_class(char_at(col));
+        let mut start = col;
+        while start > 0 && char_class(char_at(start - 1)) == target {
+            start -= 1;
+        }
+        let mut end = col;
+        while end + 1 < cols && char_class(char_at(end + 1)) == target {
+            end += 1;
+        }
+        (start, end)
+    }
+
     /// Zpracuje tazeni/klik mysi nad textem terminalu (viz `render_grid`)
     /// a podle toho aktualizuje `self.selection`. Zacatek tazeni zalozi
     /// nove oznaceni, pokracujici tazeni posouva jeho konec, a obycejny
@@ -1175,7 +1229,40 @@ impl TerminalSession {
     /// uz tak nema dvoji vyznam a vzdy jde primo na server, viz
     /// `handle_keyboard`.
     fn handle_selection_input(&mut self, response: &egui::Response, rect: egui::Rect, galley: &egui::Galley, cols: usize, rows: usize, display_offset: i32) {
-        if response.drag_started() {
+        // Trojklik (oznaceni cele radky) a dvojklik (oznaceni "slova" pod
+        // kurzorem, viz `word_bounds_at`) MUSI se resit PRED obycejnym
+        // tazenim/klikem nize - treti/druhy klik v rychlem sledu totiz
+        // vedle `triple_clicked()`/`double_clicked()` vyvola egui i
+        // beznou sadu udalosti (`clicked()`, pripadne i `drag_started()`)
+        // pro TENTO stejny snimek, takze bez tohoto poradi (od
+        // nejspecifictejsiho) by trojklik/dvojklik skoncil jen jako
+        // dvojklik/obycejny klik (nebo by rovnou zrusil prave vytvorene
+        // oznaceni pres vetev `clicked()` nize). Stejne jako tazeni mysi
+        // (`drag_stopped` nize) se i tady oznaceny text rovnou automaticky
+        // zkopiruje - zadna dalsi klavesa netreba (presne UX beznych
+        // terminalu, viz i komentar u funkce).
+        if response.triple_clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let (row, _) = Self::point_to_cell(pos, rect, galley, cols, rows, display_offset);
+                self.selection = Some(Selection { anchor: (row, 0), current: (row, cols.saturating_sub(1)) });
+                if let Some(text) = self.selected_text() {
+                    if !text.is_empty() {
+                        response.ctx.copy_text(text);
+                    }
+                }
+            }
+        } else if response.double_clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let (row, col) = Self::point_to_cell(pos, rect, galley, cols, rows, display_offset);
+                let (start_col, end_col) = self.word_bounds_at(row, col);
+                self.selection = Some(Selection { anchor: (row, start_col), current: (row, end_col) });
+                if let Some(text) = self.selected_text() {
+                    if !text.is_empty() {
+                        response.ctx.copy_text(text);
+                    }
+                }
+            }
+        } else if response.drag_started() {
             // POZOR: zamerne NE `response.interact_pointer_pos()` tady -
             // `drag_started()` je `true` az na snimku, kdy tazeni prekroci
             // vnitrni prah egui (nekolik pixelu pohybu od stisknuti
