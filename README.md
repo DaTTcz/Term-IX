@@ -13,25 +13,28 @@
 
 # Term-IX
 
-Desktopový terminálový klient pro správu vzdálených SSH spojení - napsaný v Rustu, pro Windows i Linux.
+Desktopový terminálový klient pro správu vzdálených SSH spojení i lokální sériové/COM linky - napsaný v Rustu, pro Windows i Linux.
 
-Vestavěný terminálový emulátor, strom uložených serverů se šifrovaným trezorem, info proužek se stavem serveru a rozdělené zobrazení dvou spojení vedle sebe.
+Vestavěný terminálový emulátor (SSH i sériová linka), SFTP prohlížeč souborů, strom uložených serverů se šifrovaným trezorem, info proužek se stavem serveru a rozdělené zobrazení dvou spojení vedle sebe.
 
 ---
 
 ## ✨ Funkce
 
-- **Vestavěný SSH terminál** — VT100/ANSI emulace přímo v tabu aplikace, žádné externí okno konzole
-- **Kopírování / vkládání** — označení textu tažením myši, automatické zkopírování, vložení přes Ctrl+v nebo pravým tlačítkem myši
-- **Rozdělené zobrazení** — dva taby vedle sebe, přepínání fokusu klikem nebo Ctrl+Tab, pro práci na dvou spojeních najednou
+- **Vestavěný terminál** — VT100/ANSI emulace přímo v tabu aplikace, žádné externí okno konzole
+- **SSH i sériová linka (COM/RS-232)** — připojení k SSH serverům, nebo lokálně přes sériový port s plným nastavením (rychlost, datové/stop bity, parita, řízení toku)
+- **SFTP prohlížeč souborů** — v samostatném tabu vedle terminálu, nahrávání/stahování, vytváření/mazání/přejmenování
+- **Kopírování / vkládání** — označení textu tažením myši, dvojklikem (slovo) nebo trojklikem (celý řádek), automatické zkopírování, vložení přes Ctrl+v nebo pravým tlačítkem myši
+- **Více tabů a rozdělené zobrazení** — libovolný počet otevřených tabů (i vícekrát stejný server), přehled aktuálně otevřených tabů v postranním panelu, dva taby vedle sebe s přepínáním fokusu klikem nebo Ctrl+Tab
 - **Šifrovaný trezor serverů** — AES-256-GCM + Argon2id, hlavní heslo se zadává přímo v okně appky
 - **Strom serverů** — složky (i vnořené), hledání, přejmenování, přesouvání, export/import trezoru
+- **Rychlé spojení** — jednorázové ad-hoc připojení bez ukládání do trezoru
 - **Info proužek pod terminálem** — vytížení CPU, RAM, síť nahoru/dolů, místo na disku, uptime, přihlášení uživatelé a skutečný hostname serveru
 - **Automatické obnovení spojení** po výpadku (volitelné), barevně odlišený "mrtvý" tab
 - **Dvě témata** — tmavé (Terminálové) a světlé (Moderní)
 - **Čeština i angličtina**, přepínatelné v nastavení
 - **Hostovský režim** — rychlé připojení bez hlavního hesla, nic se neukládá na disk
-- **Automatická kontrola aktualizací** — appka si sama zkontroluje novou verzi na GitHubu
+- **Aktualizace jedním klikem** — appka zkontroluje novou verzi na GitHubu, stáhne a nainstaluje ji, tlačítko "Spustit novou verzi" rovnou přepne
 
 ## 📋 Požadavky
 
@@ -70,8 +73,8 @@ Appka si při startu na pozadí zkontroluje, jestli na GitHubu není novější 
 
 ## 🏗️ Architektura
 
-Aplikace je rozdělená do samostatných cargo crates (workspace), aby šlo přidávat protokoly bez zásahu do zbytku appky.
-Přidání nového protokolu (např. sériová linka / FTP): nový crate implementující `termx_core::ProtocolModule`, zaregistrovat v `src/main.rs`, rozšířit `termx_core::Protocol` — zbytek appky (GUI, vault, update) se tím nemusí měnit.
+Aplikace je rozdělená do samostatných cargo crates (workspace), aby šlo přidávat protokoly bez zásahu do zbytku appky — takhle je zapojený i sériový/COM port (`termx-serial`) vedle původního SSH (`termx-ssh`).
+Přidání dalšího protokolu (např. FTP): nový crate implementující `termx_core::ProtocolModule`, zaregistrovat v `src/main.rs`, rozšířit `termx_core::Protocol` — zbytek appky (GUI, vault, update) se tím nemusí měnit.
 
 ## 🛠️ Technologie
 
