@@ -2299,6 +2299,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
+name = "lazy-regex"
+version = "3.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4994ba703f78b083e2f7946dac9251abd83fd43a0365f030e99b69be5b4b9ef9"
+dependencies = [
+ "lazy-regex-proc_macros",
+ "once_cell",
+ "regex",
+]
+
+[[package]]
+name = "lazy-regex-proc_macros"
+version = "3.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd97232314824e6dbef1918a871bb93f51070455e3715bf26e19a6d01aa977a0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3870,6 +3893,7 @@ version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -4397,6 +4421,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "suppaftp"
+version = "12.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba93b140f4d07f1b3f3fb4d7264b2d422d5c8b4e925eb6a2646e1342d5d2070a"
+dependencies = [
+ "chrono",
+ "lazy-regex",
+ "log",
+ "rustls",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4464,11 +4501,12 @@ dependencies = [
 
 [[package]]
 name = "term-ix"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
  "termx-core",
+ "termx-ftp",
  "termx-gui",
  "termx-serial",
  "termx-ssh",
@@ -4479,7 +4517,7 @@ dependencies = [
 
 [[package]]
 name = "termx-core"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4491,8 +4529,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "termx-ftp"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "suppaftp",
+ "termx-core",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "termx-gui"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -4503,6 +4552,7 @@ dependencies = [
  "rfd",
  "serde",
  "termx-core",
+ "termx-ftp",
  "termx-serial",
  "termx-ssh",
  "termx-update",
@@ -4514,7 +4564,7 @@ dependencies = [
 
 [[package]]
 name = "termx-serial"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4524,7 +4574,7 @@ dependencies = [
 
 [[package]]
 name = "termx-ssh"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4539,7 +4589,7 @@ dependencies = [
 
 [[package]]
 name = "termx-update"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "self_update",
@@ -4547,7 +4597,7 @@ dependencies = [
 
 [[package]]
 name = "termx-vault"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "aes-gcm",
  "anyhow",

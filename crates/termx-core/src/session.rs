@@ -144,6 +144,13 @@ pub struct Session {
     /// Rizeni toku - `None` = vychozi `SerialFlowControl::None` (zadne).
     #[serde(default)]
     pub serial_flow_control: Option<SerialFlowControl>,
+    /// Kdyz `true`, FTP spojeni (`Protocol::Ftp`) se hned po navazani TCP
+    /// spojeni povysi na FTPS explicitnim "AUTH TLS" prikazem (viz
+    /// `termx-ftp::ftp::connect`) - `false` = obycejne nesifrovane FTP.
+    /// U ostatnich protokolu se nepouziva. `#[serde(default)]`, aby stare
+    /// ulozene servery v trezoru (bez tohoto pole) sly nadale nacist.
+    #[serde(default)]
+    pub ftp_use_tls: bool,
 }
 
 impl Session {
@@ -163,6 +170,7 @@ impl Session {
             serial_parity: None,
             serial_stop_bits: None,
             serial_flow_control: None,
+            ftp_use_tls: false,
         }
     }
 }

@@ -6,11 +6,12 @@ members = [
     "crates/termx-update",
     "crates/termx-ssh",
     "crates/termx-serial",
+    "crates/termx-ftp",
     "crates/termx-gui",
 ]
 
 [workspace.package]
-version = "0.5.4"
+version = "0.6.0"
 edition = "2021"
 authors = ["DaTTcz"]
 repository = "https://github.com/DaTTcz/Term-IX"
@@ -22,6 +23,7 @@ termx-vault = { path = "crates/termx-vault" }
 termx-update = { path = "crates/termx-update" }
 termx-ssh = { path = "crates/termx-ssh" }
 termx-serial = { path = "crates/termx-serial" }
+termx-ftp = { path = "crates/termx-ftp" }
 termx-gui = { path = "crates/termx-gui" }
 
 anyhow = "1"
@@ -65,6 +67,7 @@ path = "src/main.rs"
 termx-core = { workspace = true }
 termx-ssh = { workspace = true }
 termx-serial = { workspace = true }
+termx-ftp = { workspace = true }
 termx-gui = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }

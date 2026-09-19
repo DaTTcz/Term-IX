@@ -70,6 +70,7 @@ fn main() -> anyhow::Result<()> {
     let mut registry = ModuleRegistry::new();
     registry.register(Arc::new(termx_ssh::SshModule::new()));
     registry.register(Arc::new(termx_serial::SerialModule::new()));
+    registry.register(Arc::new(termx_ftp::FtpModule::new()));
 
     // GUI (termx-gui, postavene na egui/eframe) si bezi ve vlastni
     // blokujici smycce na aktualnim vlakne - na rozdil od puvodniho TUI

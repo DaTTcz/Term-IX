@@ -21,6 +21,10 @@ termx-ssh = { workspace = true }
 # Connection tab - stejny ucel jako `termx-ssh` vyse, jen pro
 # `Protocol::Serial`. Viz `terminal.rs`.
 termx-serial = { workspace = true }
+# Skutecne FTP/FTPS spojeni (`termx_ftp::spawn_ftp_session`) pro Ftp tab -
+# stejny ucel jako `termx-ssh` vyse pro SFTP, jen samostatny protokol misto
+# SSH subsystemu. Viz `ftp_browser.rs`.
+termx-ftp = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

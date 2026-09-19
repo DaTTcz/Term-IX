@@ -33,6 +33,7 @@
 //! klicem (viz `app::SETTINGS_STORAGE_KEY`).
 
 mod app;
+mod ftp_browser;
 mod i18n;
 #[cfg(target_os = "linux")]
 mod linux_desktop;

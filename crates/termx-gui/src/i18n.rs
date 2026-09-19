@@ -85,6 +85,11 @@ pub struct Strings {
     pub field_protocol: &'static str,
     pub protocol_ssh: &'static str,
     pub protocol_serial: &'static str,
+    pub protocol_ftp: &'static str,
+    /// Popisek zaskrtavatka "Použít FTPS" v rezimu `Protocol::Ftp` ve
+    /// formularich Novy/Upravit server (i v rychlem/Home pripojeni) -
+    /// viz `Session::ftp_use_tls`.
+    pub ftp_use_tls_checkbox: &'static str,
     /// Label pole "Port:" v seriovem rezimu (`Protocol::Serial`) - stejne
     /// textove pole jako `field_host` (viz `Session::serial_baud_rate`
     /// v `termx-core`, proc port nema vlastni pole), jen s jinym labelem
@@ -225,6 +230,14 @@ pub struct Strings {
     pub sftp_status_renamed: &'static str,
     pub sftp_status_deleted: &'static str,
     pub sftp_status_created: &'static str,
+
+    // -- FTP prohlizec (`ftp_browser.rs`) - stejny vzhled/ovladani jako
+    // SFTP vyse, vetsina textu (akce, hlasky prenosu) se proto zamerne
+    // SDILI s `sftp_*` retezci nad timto blokem, tady jsou jen ty texty,
+    // ktere skutecne zminuji konkretni protokol (SFTP/FTP). --
+    pub tab_ftp_suffix: &'static str,
+    pub ftp_disconnected: &'static str,
+    pub ftp_login_heading: &'static str,
     /// Tooltip ikonky "‖" v `tab_bar` pro oznaceni tabu do rozdeleneho
     /// zobrazeni (viz `MainApp::split_marks`/`toggle_split_mark`).
     pub btn_split_mark: &'static str,
@@ -383,6 +396,8 @@ pub const CS: Strings = Strings {
     field_protocol: "Protokol:",
     protocol_ssh: "SSH",
     protocol_serial: "Sériový port (COM)",
+    protocol_ftp: "FTP",
+    ftp_use_tls_checkbox: "Použít FTPS (šifrované, TLS)",
     field_serial_port: "Port:",
     field_baud_rate: "Rychlost (baud):",
     field_data_bits: "Datové bity:",
@@ -482,6 +497,9 @@ pub const CS: Strings = Strings {
     sftp_status_renamed: "přejmenováno",
     sftp_status_deleted: "smazáno",
     sftp_status_created: "vytvořena složka",
+    tab_ftp_suffix: "FTP",
+    ftp_disconnected: "FTP spojení bylo ukončeno.",
+    ftp_login_heading: "Přihlášení k FTP",
     connection_gone: "Tento server už neexistuje (byl smazán nebo šlo o dočasné rychlé spojení, které skončilo se zavřením tabu).",
     btn_split_mark: "Zobrazit vedle jiného tabu (rozdělené zobrazení)",
     btn_split_unmark: "Zrušit rozdělené zobrazení",
@@ -622,6 +640,8 @@ pub const EN: Strings = Strings {
     field_protocol: "Protocol:",
     protocol_ssh: "SSH",
     protocol_serial: "Serial port (COM)",
+    protocol_ftp: "FTP",
+    ftp_use_tls_checkbox: "Use FTPS (encrypted, TLS)",
     field_serial_port: "Port:",
     field_baud_rate: "Baud rate:",
     field_data_bits: "Data bits:",
@@ -721,6 +741,9 @@ pub const EN: Strings = Strings {
     sftp_status_renamed: "renamed",
     sftp_status_deleted: "deleted",
     sftp_status_created: "folder created",
+    tab_ftp_suffix: "FTP",
+    ftp_disconnected: "The FTP connection was closed.",
+    ftp_login_heading: "Log in to FTP",
     connection_gone: "This server no longer exists (it was deleted, or it was a temporary quick connection that ended when its tab was closed).",
     btn_split_mark: "Show side by side with another tab (split view)",
     btn_split_unmark: "Turn off split view",

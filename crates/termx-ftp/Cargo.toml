@@ -1,0 +1,28 @@
+[package]
+name = "termx-ftp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Term-IX FTP/FTPS protocol module (suppaftp + rustls-ring - cisty Rust, bez zavislosti na OpenSSL)"
+
+[dependencies]
+termx-core = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+# Synchronni (blokujici) FTP/FTPS klient - stejny pristup ("blokujici vlakno
+# + std::sync::mpsc kanaly", viz `ftp.rs`) jako `termx-serial` pro seriovou
+# linku, zadny tokio runtime tu neni potreba (na rozdil od `termx-ssh`,
+# ktere je async kvuli `russh`).
+#
+# `rustls-ring` = cisty Rust TLS backend (zadny OpenSSL) - stejna filosofie
+# jako `russh` u `termx-ssh`. FTPS (explicitni AUTH TLS, viz
+# `ftp::connect`) je soucasti uz od prvni verze tohoto modulu, ne pozdejsi
+# pridani - `rustls` samotne (vc. `pki_types`, danger API pro vlastni
+# overovaci logiku certifikatu) se pouziva pres reexport `suppaftp::rustls`,
+# NE jako samostatna primo deklarovana zavislost - jinak by hrozil
+# nesoulad verzi mezi nasi `rustls::ClientConfig` a tou, kterou uvnitr
+# pouziva samotne `suppaftp` (`RustlsConnector`/`RustlsFtpStream`).
+suppaftp = { version = "12", features = ["rustls-ring"] }

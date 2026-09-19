@@ -42,6 +42,7 @@ use termx_update::LatestRelease;
 use termx_vault::{Vault, VaultData};
 use uuid::Uuid;
 
+use crate::ftp_browser;
 use crate::i18n::{self, Lang};
 use crate::sftp_browser;
 use crate::splash;
@@ -249,6 +250,10 @@ enum TabKind {
     /// nebylo pozadovano a pro prohlizeni souboru nedava stejny smysl
     /// jako u nezavislych terminalovych relaci).
     Sftp(Uuid),
+    /// FTP/FTPS prohlizec souboru (viz `ftp_browser.rs`) - stejny ucel a
+    /// stejne chovani (jeden tab na session) jako `Sftp` vyse, jen pro
+    /// `Protocol::Ftp` misto SSH subsystemu.
+    Ftp(Uuid),
 }
 
 /// Zvoleny zpusob prihlaseni v editacnich formularich pro server
@@ -444,9 +449,9 @@ struct NewSessionForm {
     term_type: String,
     /// Ktery protokol se ma pro tento server pouzit (viz `Protocol`) -
     /// zpetna vazba "Připojení přes COM/sériový port jako další
-    /// 'plugin'". Zatim jen `Ssh`/`Serial` jsou v UI vyberatelne (viz
+    /// 'plugin'". `Ssh`/`Serial`/`Ftp` jsou v UI vyberatelne (viz
     /// `show_new_session_dialog`) - ostatni varianty `Protocol` nemaji
-    /// zatim vlastni protokolovy modul (`termx-ftp`/`termx-telnet`/...).
+    /// zatim vlastni protokolovy modul (`termx-telnet`/...).
     protocol: Protocol,
     /// Textova podoba `Session::serial_baud_rate` (viz tam) - prazdne =
     /// vychozi `termx_serial::DEFAULT_BAUD_RATE`. Relevantni jen kdyz
@@ -463,6 +468,9 @@ struct NewSessionForm {
     serial_parity: SerialParity,
     serial_stop_bits: SerialStopBits,
     serial_flow_control: SerialFlowControl,
+    /// Viz `Session::ftp_use_tls` - relevantni jen kdyz `protocol ==
+    /// Protocol::Ftp`.
+    ftp_use_tls: bool,
     /// `false` jen do prvniho vykresleni tohoto dialogu - pak se pole
     /// "Název:" samo fokusne, aby slo rovnou psat bez nutnosti tam
     /// nejdriv kliknout (viz pozadavek "+server , + složka, vyskakovacímu
@@ -491,6 +499,7 @@ impl Default for NewSessionForm {
             serial_parity: SerialParity::None,
             serial_stop_bits: SerialStopBits::One,
             serial_flow_control: SerialFlowControl::None,
+            ftp_use_tls: false,
             focus_requested: false,
         }
     }
@@ -526,6 +535,8 @@ struct EditSessionForm {
     serial_parity: SerialParity,
     serial_stop_bits: SerialStopBits,
     serial_flow_control: SerialFlowControl,
+    /// Viz `NewSessionForm::ftp_use_tls`.
+    ftp_use_tls: bool,
     /// Viz `NewSessionForm::focus_requested` - stejny ucel (fokus na
     /// pole "Název:" hned pri otevreni dialogu).
     focus_requested: bool,
@@ -567,6 +578,7 @@ impl EditSessionForm {
             serial_parity: session.serial_parity.unwrap_or(SerialParity::None),
             serial_stop_bits: session.serial_stop_bits.unwrap_or(SerialStopBits::One),
             serial_flow_control: session.serial_flow_control.unwrap_or(SerialFlowControl::None),
+            ftp_use_tls: session.ftp_use_tls,
             focus_requested: false,
         }
     }
@@ -601,6 +613,8 @@ struct QuickConnectForm {
     serial_parity: SerialParity,
     serial_stop_bits: SerialStopBits,
     serial_flow_control: SerialFlowControl,
+    /// Viz `NewSessionForm::ftp_use_tls`.
+    ftp_use_tls: bool,
     /// Viz `NewSessionForm::focus_requested`.
     focus_requested: bool,
 }
@@ -623,6 +637,7 @@ impl Default for QuickConnectForm {
             serial_parity: SerialParity::None,
             serial_stop_bits: SerialStopBits::One,
             serial_flow_control: SerialFlowControl::None,
+            ftp_use_tls: false,
             focus_requested: false,
         }
     }
@@ -663,6 +678,8 @@ struct HomeConnectForm {
     serial_parity: SerialParity,
     serial_stop_bits: SerialStopBits,
     serial_flow_control: SerialFlowControl,
+    /// Viz `NewSessionForm::ftp_use_tls`.
+    ftp_use_tls: bool,
     save: bool,
 }
 
@@ -685,6 +702,7 @@ impl Default for HomeConnectForm {
             serial_parity: SerialParity::None,
             serial_stop_bits: SerialStopBits::One,
             serial_flow_control: SerialFlowControl::None,
+            ftp_use_tls: false,
             save: true,
         }
     }
@@ -1216,6 +1234,9 @@ struct MainApp {
     /// Obdoba `terminal_sessions`, ale pro otevrene "Sftp" taby (viz
     /// `TabKind::Sftp`/`open_sftp_tab`) - klic je take id session.
     sftp_sessions: std::collections::HashMap<Uuid, sftp_browser::SftpBrowser>,
+    /// Obdoba `sftp_sessions`, jen pro otevrene "Ftp" taby (viz
+    /// `TabKind::Ftp`/`open_ftp_tab`).
+    ftp_sessions: std::collections::HashMap<Uuid, ftp_browser::FtpBrowser>,
 
     new_session_form: Option<NewSessionForm>,
     /// Editace jiz ulozeneho serveru - viz [`EditSessionForm`].
@@ -1317,6 +1338,7 @@ impl MainApp {
             active_tab: 0,
             terminal_sessions: std::collections::HashMap::new(),
             sftp_sessions: std::collections::HashMap::new(),
+            ftp_sessions: std::collections::HashMap::new(),
             new_session_form: None,
             edit_session_form: None,
             new_folder_dialog: None,
@@ -1364,6 +1386,7 @@ impl MainApp {
             active_tab: 0,
             terminal_sessions: std::collections::HashMap::new(),
             sftp_sessions: std::collections::HashMap::new(),
+            ftp_sessions: std::collections::HashMap::new(),
             new_session_form: None,
             edit_session_form: None,
             new_folder_dialog: None,
@@ -1526,6 +1549,10 @@ impl MainApp {
                 .find_session(id)
                 .map(|s| format!("{} ({})", s.name, tr.tab_sftp_suffix))
                 .unwrap_or_else(|| tr.tab_connection_fallback.to_string()),
+            TabKind::Ftp(id) => self
+                .find_session(id)
+                .map(|s| format!("{} ({})", s.name, tr.tab_ftp_suffix))
+                .unwrap_or_else(|| tr.tab_connection_fallback.to_string()),
         }
     }
 
@@ -1535,6 +1562,17 @@ impl MainApp {
     /// tab (i kdyz uz jeden pro stejnou session bezi) viz
     /// `open_new_session_tab` nize.
     fn open_session_tab(&mut self, session_id: Uuid) {
+        // `Protocol::Ftp` nema vestaveny terminal (viz `render_connection`
+        // nize) - "Otevřít"/dvojklik na takovou session proto rovnou
+        // otevre jeji "Ftp" tab (`open_ftp_tab`), stejne jako uz drive
+        // "Otevřít SFTP" v kontextovem menu, misto aby skoncil v
+        // nefunkcnim Connection tabu.
+        if let Some(session) = self.find_session(session_id) {
+            if session.protocol == Protocol::Ftp {
+                self.open_ftp_tab(session_id);
+                return;
+            }
+        }
         if let Some(idx) = self.tabs.iter().position(|t| matches!(t, TabKind::Connection { session_id: sid, .. } if *sid == session_id)) {
             self.active_tab = idx;
             return;
@@ -1548,6 +1586,15 @@ impl MainApp {
     /// `TreeAction::OpenNewTab`/`btn_open_new_tab` a doc-komentar u
     /// `TabKind::Connection`.
     fn open_new_session_tab(&mut self, session_id: Uuid) {
+        // Viz `open_session_tab` - `Ftp` nema (na rozdil od `Ssh`/`Serial`)
+        // smysl otevirat opakovane ve vice nezavislych tabech, takze se
+        // stejne jako tam jen presmeruje na (jediny) "Ftp" tab.
+        if let Some(session) = self.find_session(session_id) {
+            if session.protocol == Protocol::Ftp {
+                self.open_ftp_tab(session_id);
+                return;
+            }
+        }
         self.tabs.push(TabKind::Connection { tab_id: Uuid::new_v4(), session_id });
         self.active_tab = self.tabs.len() - 1;
     }
@@ -1561,6 +1608,17 @@ impl MainApp {
             return;
         }
         self.tabs.push(TabKind::Sftp(id));
+        self.active_tab = self.tabs.len() - 1;
+    }
+
+    /// Otevre (nebo aktivuje jiz otevreny) "Ftp" tab pro danou session -
+    /// viz `open_sftp_tab` (stejny vzor).
+    fn open_ftp_tab(&mut self, id: Uuid) {
+        if let Some(idx) = self.tabs.iter().position(|t| matches!(t, TabKind::Ftp(sid) if *sid == id)) {
+            self.active_tab = idx;
+            return;
+        }
+        self.tabs.push(TabKind::Ftp(id));
         self.active_tab = self.tabs.len() - 1;
     }
 
@@ -1585,6 +1643,9 @@ impl MainApp {
         }
         if let TabKind::Sftp(id) = self.tabs[idx] {
             self.sftp_sessions.remove(&id);
+        }
+        if let TabKind::Ftp(id) = self.tabs[idx] {
+            self.ftp_sessions.remove(&id);
         }
         // Zavreny tab uz nedava smysl drzet oznaceny pro rozdelene
         // zobrazeni (viz `split_marks`/`toggle_split_mark`) - jinak by po
@@ -1678,8 +1739,14 @@ impl MainApp {
                     TabKind::Sftp(id) => self.sftp_sessions.get(&id).map(|s| s.state()),
                     _ => None,
                 };
+                // Obdoba `sftp_state`, jen pro "Ftp" taby.
+                let ftp_state = match kind {
+                    TabKind::Ftp(id) => self.ftp_sessions.get(&id).map(|s| s.state()),
+                    _ => None,
+                };
                 let is_dead = conn_state == Some(terminal::ConnState::Disconnected)
-                    || sftp_state == Some(sftp_browser::SftpState::Disconnected);
+                    || sftp_state == Some(sftp_browser::SftpState::Disconnected)
+                    || ftp_state == Some(ftp_browser::FtpState::Disconnected);
 
                 // Cely tab (puntik + nazev + zavirci "X") je JEDEN
                 // spolecny `Frame` se sdilenym pozadim - drive to byly
@@ -1800,7 +1867,8 @@ impl MainApp {
                                     .clicked();
                                 if close_clicked {
                                     let is_live = conn_state == Some(terminal::ConnState::Connected)
-                                        || sftp_state == Some(sftp_browser::SftpState::Connected);
+                                        || sftp_state == Some(sftp_browser::SftpState::Connected)
+                                        || ftp_state == Some(ftp_browser::FtpState::Connected);
                                     if is_live {
                                         to_confirm_close = Some(CloseTabConfirm { idx, title: title.clone() });
                                     } else {
@@ -1887,6 +1955,9 @@ impl MainApp {
             // terminal - vlastni vnitrni rozlozeni (`sftp_browser.rs`)
             // uz ma svuj vlastni prostor od kraje pryc.
             TabKind::Sftp(id) => self.render_sftp(ui, id),
+            // FTP prohlizec - viz `TabKind::Sftp` vyse (stejny duvod
+            // zadneho dodatecneho odsazeni).
+            TabKind::Ftp(id) => self.render_ftp(ui, id),
         }
     }
 
@@ -2299,6 +2370,16 @@ impl MainApp {
                             ui.label(tr.field_protocol);
                             ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Ssh, tr.protocol_ssh);
                             ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Serial, tr.protocol_serial);
+                            // Kdyz uzivatel prave prepnul na FTP a port je
+                            // porad na SSH vychozi hodnote (nebo prazdny),
+                            // rovnou ho posuneme na obvykly FTP port 21 -
+                            // stejny "chytry" vychozi pattern u vsech 4
+                            // formularu (viz `show_new_session_dialog` atd.).
+                            if ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Ftp, tr.protocol_ftp).clicked()
+                                && (self.home_connect_form.port.is_empty() || self.home_connect_form.port == "22")
+                            {
+                                self.home_connect_form.port = "21".to_string();
+                            }
                         });
                         ui.add_space(4.0);
 
@@ -2371,16 +2452,37 @@ impl MainApp {
                                 &term_type_suggestions,
                             );
 
-                            if self.home_connect_form.protocol != Protocol::Serial {
-                                render_auth_fields(
-                                    ui,
-                                    tr,
-                                    &mut self.home_connect_form.auth_kind,
-                                    &mut self.home_connect_form.username,
-                                    &mut self.home_connect_form.password,
-                                    &mut self.home_connect_form.key_path,
-                                    &mut self.home_connect_form.key_passphrase,
-                                );
+                            match self.home_connect_form.protocol {
+                                Protocol::Serial => {}
+                                // FTP nema smysl kombinovat s prihlasenim
+                                // privatnim klicem (`AuthKind::PrivateKey`) -
+                                // misto sdileneho `render_auth_fields` (SSH/
+                                // vychozi) proto jen prime jmeno/heslo +
+                                // zaskrtavatko FTPS (viz `Session::ftp_use_tls`).
+                                Protocol::Ftp => {
+                                    ui.label(tr.field_username);
+                                    ui.text_edit_singleline(&mut self.home_connect_form.username);
+                                    ui.end_row();
+
+                                    ui.label(tr.field_password);
+                                    ui.add(egui::TextEdit::singleline(&mut self.home_connect_form.password).password(true));
+                                    ui.end_row();
+
+                                    ui.label("");
+                                    ui.checkbox(&mut self.home_connect_form.ftp_use_tls, tr.ftp_use_tls_checkbox);
+                                    ui.end_row();
+                                }
+                                _ => {
+                                    render_auth_fields(
+                                        ui,
+                                        tr,
+                                        &mut self.home_connect_form.auth_kind,
+                                        &mut self.home_connect_form.username,
+                                        &mut self.home_connect_form.password,
+                                        &mut self.home_connect_form.key_path,
+                                        &mut self.home_connect_form.key_passphrase,
+                                    );
+                                }
                             }
                         });
                     });
@@ -2460,6 +2562,22 @@ impl MainApp {
                 session.serial_parity = Some(self.home_connect_form.serial_parity);
                 session.serial_stop_bits = Some(self.home_connect_form.serial_stop_bits);
                 session.serial_flow_control = Some(self.home_connect_form.serial_flow_control);
+                session
+            }
+            // POZOR: predtim tenhle spolecny `_` odchytaval i FTP a VZDY
+            // vytvoril `Protocol::Ssh` session (zatimco `Protocol::Ftp` v
+            // UI vubec vyberatelne nebylo) - ted uz FTP vyberatelne je,
+            // takze potrebuje vlastni vetev (jine vychozi cislo portu, a
+            // primo `AuthMethod::Password` bez `AuthKind`/privatniho
+            // klice - viz radek vyse u `render_auth_fields`).
+            Protocol::Ftp => {
+                let port: u16 = self.home_connect_form.port.trim().parse().unwrap_or(21);
+                let auth = AuthMethod::Password {
+                    username: self.home_connect_form.username.clone(),
+                    password: self.home_connect_form.password.clone(),
+                };
+                let mut session = Session::new(name, Protocol::Ftp, host, port, auth);
+                session.ftp_use_tls = self.home_connect_form.ftp_use_tls;
                 session
             }
             _ => {
@@ -2719,6 +2837,34 @@ impl MainApp {
         }
     }
 
+    /// FTP/FTPS prohlizec souboru (viz `ftp_browser.rs`) - obdoba
+    /// `render_sftp` vyse, jen pro `Protocol::Ftp` misto SSH subsystemu.
+    fn render_ftp(&mut self, ui: &mut egui::Ui, id: Uuid) {
+        let Some(session) = self.find_session(id).cloned() else {
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                ui.label(i18n::t(self.settings.lang).connection_gone);
+            });
+            return;
+        };
+
+        if session.protocol != Protocol::Ftp {
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                ui.heading(&session.name);
+                ui.add_space(8.0);
+                ui.label(i18n::protocol_not_supported(self.settings.lang, session.protocol));
+            });
+            return;
+        }
+
+        self.ftp_sessions.entry(id).or_insert_with(|| ftp_browser::FtpBrowser::new(&session));
+
+        if let Some(browser) = self.ftp_sessions.get_mut(&id) {
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                browser.render(ui, self.settings.lang);
+            });
+        }
+    }
+
     // -- horni menu -----------------------------------------------------
 
     fn top_menu(&mut self, ctx: &egui::Context) {
@@ -2841,6 +2987,11 @@ impl MainApp {
                     ui.label(tr.field_protocol);
                     ui.selectable_value(&mut form.protocol, Protocol::Ssh, tr.protocol_ssh);
                     ui.selectable_value(&mut form.protocol, Protocol::Serial, tr.protocol_serial);
+                    if ui.selectable_value(&mut form.protocol, Protocol::Ftp, tr.protocol_ftp).clicked()
+                        && (form.port.is_empty() || form.port == "22")
+                    {
+                        form.port = "21".to_string();
+                    }
                 });
                 ui.add_space(4.0);
 
@@ -2932,16 +3083,32 @@ impl MainApp {
                     // SSH - seriova linka zadnou autentizaci nema (viz
                     // `Session::auth` zustava `AuthMethod::None` pro
                     // `Protocol::Serial`, viz submit blok nize).
-                    if form.protocol != Protocol::Serial {
-                        render_auth_fields(
-                            ui,
-                            tr,
-                            &mut form.auth_kind,
-                            &mut form.username,
-                            &mut form.password,
-                            &mut form.key_path,
-                            &mut form.key_passphrase,
-                        );
+                    match form.protocol {
+                        Protocol::Serial => {}
+                        Protocol::Ftp => {
+                            ui.label(tr.field_username);
+                            ui.text_edit_singleline(&mut form.username);
+                            ui.end_row();
+
+                            ui.label(tr.field_password);
+                            ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
+                            ui.end_row();
+
+                            ui.label("");
+                            ui.checkbox(&mut form.ftp_use_tls, tr.ftp_use_tls_checkbox);
+                            ui.end_row();
+                        }
+                        _ => {
+                            render_auth_fields(
+                                ui,
+                                tr,
+                                &mut form.auth_kind,
+                                &mut form.username,
+                                &mut form.password,
+                                &mut form.key_path,
+                                &mut form.key_passphrase,
+                            );
+                        }
                     }
                 });
 
@@ -2976,6 +3143,17 @@ impl MainApp {
                     session.serial_parity = Some(form.serial_parity);
                     session.serial_stop_bits = Some(form.serial_stop_bits);
                     session.serial_flow_control = Some(form.serial_flow_control);
+                    session
+                }
+                // Viz stejny duvod/POZOR jako u `submit_home_connect` -
+                // FTP uz je v prepinaci protokolu vyberatelne, takze
+                // potrebuje vlastni vetev (jinak by `_` nize kazdou FTP
+                // session tise ulozilo jako SSH).
+                Protocol::Ftp => {
+                    let port: u16 = form.port.trim().parse().unwrap_or(21);
+                    let auth = AuthMethod::Password { username: form.username.clone(), password: form.password.clone() };
+                    let mut session = Session::new(name, Protocol::Ftp, form.host.clone(), port, auth);
+                    session.ftp_use_tls = form.ftp_use_tls;
                     session
                 }
                 _ => {
@@ -3025,6 +3203,11 @@ impl MainApp {
                     ui.label(tr.field_protocol);
                     ui.selectable_value(&mut form.protocol, Protocol::Ssh, tr.protocol_ssh);
                     ui.selectable_value(&mut form.protocol, Protocol::Serial, tr.protocol_serial);
+                    if ui.selectable_value(&mut form.protocol, Protocol::Ftp, tr.protocol_ftp).clicked()
+                        && (form.port.is_empty() || form.port == "22")
+                    {
+                        form.port = "21".to_string();
+                    }
                 });
                 ui.add_space(4.0);
 
@@ -3093,16 +3276,32 @@ impl MainApp {
                         &term_type_suggestions,
                     );
 
-                    if form.protocol != Protocol::Serial {
-                        render_auth_fields(
-                            ui,
-                            tr,
-                            &mut form.auth_kind,
-                            &mut form.username,
-                            &mut form.password,
-                            &mut form.key_path,
-                            &mut form.key_passphrase,
-                        );
+                    match form.protocol {
+                        Protocol::Serial => {}
+                        Protocol::Ftp => {
+                            ui.label(tr.field_username);
+                            ui.text_edit_singleline(&mut form.username);
+                            ui.end_row();
+
+                            ui.label(tr.field_password);
+                            ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
+                            ui.end_row();
+
+                            ui.label("");
+                            ui.checkbox(&mut form.ftp_use_tls, tr.ftp_use_tls_checkbox);
+                            ui.end_row();
+                        }
+                        _ => {
+                            render_auth_fields(
+                                ui,
+                                tr,
+                                &mut form.auth_kind,
+                                &mut form.username,
+                                &mut form.password,
+                                &mut form.key_path,
+                                &mut form.key_passphrase,
+                            );
+                        }
                     }
                 });
 
@@ -3145,6 +3344,20 @@ impl MainApp {
                         session.serial_stop_bits = Some(form.serial_stop_bits);
                         session.serial_flow_control = Some(form.serial_flow_control);
                     }
+                    // Viz stejny duvod/POZOR jako u `submit_home_connect`/
+                    // `show_new_session_dialog` - FTP potrebuje vlastni
+                    // vetev (jine vychozi cislo portu, primy
+                    // `AuthMethod::Password`, ulozeni `ftp_use_tls`).
+                    Protocol::Ftp => {
+                        session.port = form.port.trim().parse().unwrap_or(21);
+                        session.auth = AuthMethod::Password { username: form.username.clone(), password: form.password.clone() };
+                        session.serial_baud_rate = None;
+                        session.serial_data_bits = None;
+                        session.serial_parity = None;
+                        session.serial_stop_bits = None;
+                        session.serial_flow_control = None;
+                        session.ftp_use_tls = form.ftp_use_tls;
+                    }
                     _ => {
                         session.port = form.port.trim().parse().unwrap_or(22);
                         session.auth = build_auth_method(form.auth_kind, &form.username, &form.password, &form.key_path, &form.key_passphrase);
@@ -3153,6 +3366,7 @@ impl MainApp {
                         session.serial_parity = None;
                         session.serial_stop_bits = None;
                         session.serial_flow_control = None;
+                        session.ftp_use_tls = false;
                     }
                 }
                 let folder = form.folder.trim();
@@ -3382,9 +3596,12 @@ impl MainApp {
                         self.terminal_sessions.remove(&tab_id);
                     }
                     self.tabs.retain(|t| {
-                        !matches!(t, TabKind::Connection { session_id, .. } if session_id == id) && !matches!(t, TabKind::Sftp(sid) if sid == id)
+                        !matches!(t, TabKind::Connection { session_id, .. } if session_id == id)
+                            && !matches!(t, TabKind::Sftp(sid) if sid == id)
+                            && !matches!(t, TabKind::Ftp(sid) if sid == id)
                     });
                     self.sftp_sessions.remove(id);
+                    self.ftp_sessions.remove(id);
                     if self.active_tab >= self.tabs.len() {
                         self.active_tab = self.tabs.len().saturating_sub(1);
                     }
@@ -3650,6 +3867,11 @@ impl MainApp {
                     ui.label(tr.field_protocol);
                     ui.selectable_value(&mut form.protocol, Protocol::Ssh, tr.protocol_ssh);
                     ui.selectable_value(&mut form.protocol, Protocol::Serial, tr.protocol_serial);
+                    if ui.selectable_value(&mut form.protocol, Protocol::Ftp, tr.protocol_ftp).clicked()
+                        && (form.port.is_empty() || form.port == "22")
+                    {
+                        form.port = "21".to_string();
+                    }
                 });
                 ui.add_space(4.0);
 
@@ -3717,16 +3939,32 @@ impl MainApp {
                         &term_type_suggestions,
                     );
 
-                    if form.protocol != Protocol::Serial {
-                        render_auth_fields(
-                            ui,
-                            tr,
-                            &mut form.auth_kind,
-                            &mut form.username,
-                            &mut form.password,
-                            &mut form.key_path,
-                            &mut form.key_passphrase,
-                        );
+                    match form.protocol {
+                        Protocol::Serial => {}
+                        Protocol::Ftp => {
+                            ui.label(tr.field_username);
+                            ui.text_edit_singleline(&mut form.username);
+                            ui.end_row();
+
+                            ui.label(tr.field_password);
+                            ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
+                            ui.end_row();
+
+                            ui.label("");
+                            ui.checkbox(&mut form.ftp_use_tls, tr.ftp_use_tls_checkbox);
+                            ui.end_row();
+                        }
+                        _ => {
+                            render_auth_fields(
+                                ui,
+                                tr,
+                                &mut form.auth_kind,
+                                &mut form.username,
+                                &mut form.password,
+                                &mut form.key_path,
+                                &mut form.key_passphrase,
+                            );
+                        }
                     }
                 });
 
@@ -3760,6 +3998,15 @@ impl MainApp {
                     session.serial_parity = Some(form.serial_parity);
                     session.serial_stop_bits = Some(form.serial_stop_bits);
                     session.serial_flow_control = Some(form.serial_flow_control);
+                    session
+                }
+                // Viz stejny duvod/POZOR jako u ostatnich 3 formularu -
+                // FTP potrebuje vlastni vetev.
+                Protocol::Ftp => {
+                    let port: u16 = form.port.trim().parse().unwrap_or(21);
+                    let auth = AuthMethod::Password { username: form.username.clone(), password: form.password.clone() };
+                    let mut session = Session::new(name, Protocol::Ftp, form.host.clone(), port, auth);
+                    session.ftp_use_tls = form.ftp_use_tls;
                     session
                 }
                 _ => {
@@ -4153,10 +4400,16 @@ impl MainApp {
                     TabKind::Sftp(id) => self.sftp_sessions.get(&id).map(|s| s.state()),
                     _ => None,
                 };
+                let ftp_state = match kind {
+                    TabKind::Ftp(id) => self.ftp_sessions.get(&id).map(|s| s.state()),
+                    _ => None,
+                };
                 let is_dead = conn_state == Some(terminal::ConnState::Disconnected)
-                    || sftp_state == Some(sftp_browser::SftpState::Disconnected);
+                    || sftp_state == Some(sftp_browser::SftpState::Disconnected)
+                    || ftp_state == Some(ftp_browser::FtpState::Disconnected);
                 let is_live = conn_state == Some(terminal::ConnState::Connected)
-                    || sftp_state == Some(sftp_browser::SftpState::Connected);
+                    || sftp_state == Some(sftp_browser::SftpState::Connected)
+                    || ftp_state == Some(ftp_browser::FtpState::Connected);
 
                 ui.horizontal(|ui| {
                     // Mensi mezera nez vychozi mezi teckou/nazvem/"X".
