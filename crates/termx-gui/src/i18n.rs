@@ -86,10 +86,16 @@ pub struct Strings {
     pub protocol_ssh: &'static str,
     pub protocol_serial: &'static str,
     pub protocol_ftp: &'static str,
+    /// Viz `Protocol::Rdp`/`termx-rdp` - pripojeni ke vzdalene plose
+    /// Windows.
+    pub protocol_rdp: &'static str,
     /// Popisek zaskrtavatka "Použít FTPS" v rezimu `Protocol::Ftp` ve
     /// formularich Novy/Upravit server (i v rychlem/Home pripojeni) -
     /// viz `Session::ftp_use_tls`.
     pub ftp_use_tls_checkbox: &'static str,
+    /// Label volitelneho pole "Doména:" v rezimu `Protocol::Rdp` - viz
+    /// `Session::rdp_domain`.
+    pub field_domain: &'static str,
     /// Label pole "Port:" v seriovem rezimu (`Protocol::Serial`) - stejne
     /// textove pole jako `field_host` (viz `Session::serial_baud_rate`
     /// v `termx-core`, proc port nema vlastni pole), jen s jinym labelem
@@ -238,6 +244,26 @@ pub struct Strings {
     pub tab_ftp_suffix: &'static str,
     pub ftp_disconnected: &'static str,
     pub ftp_login_heading: &'static str,
+
+    // -- RDP prohlizec (`rdp_viewer.rs`) - na rozdil od SFTP/FTP vyse
+    // NENI vlastni plocha primo v tabu, viz jeho header komentar - tyto
+    // texty jsou jen pro stavovou kartu v tabu a ovladaci listu
+    // samostatneho OS okna. --
+    pub tab_rdp_suffix: &'static str,
+    pub rdp_connecting: &'static str,
+    pub rdp_connected: &'static str,
+    pub rdp_disconnected: &'static str,
+    /// Tlacitko ve stavove karte, kdyz uz je okno se vzdalenou plochou
+    /// otevrene - preda mu OS fokus (`egui::ViewportCommand::Focus`).
+    pub rdp_focus_window: &'static str,
+    /// Tlacitko ve stavove karte poté, co uzivatel okno zavrel (krizkem)
+    /// - RDP relace mezitim bezi dal na pozadi, tlacitko ji jen znovu
+    /// "vytáhne" do viditelneho okna.
+    pub rdp_reopen_window: &'static str,
+    pub rdp_toolbar_fullscreen: &'static str,
+    pub rdp_toolbar_ctrl_alt_del: &'static str,
+    pub rdp_toolbar_disconnect: &'static str,
+
     /// Tooltip ikonky "‖" v `tab_bar` pro oznaceni tabu do rozdeleneho
     /// zobrazeni (viz `MainApp::split_marks`/`toggle_split_mark`).
     pub btn_split_mark: &'static str,
@@ -397,7 +423,9 @@ pub const CS: Strings = Strings {
     protocol_ssh: "SSH",
     protocol_serial: "Sériový port (COM)",
     protocol_ftp: "FTP",
+    protocol_rdp: "RDP (Vzdálená plocha)",
     ftp_use_tls_checkbox: "Použít FTPS (šifrované, TLS)",
+    field_domain: "Doména (volitelné):",
     field_serial_port: "Port:",
     field_baud_rate: "Rychlost (baud):",
     field_data_bits: "Datové bity:",
@@ -500,6 +528,15 @@ pub const CS: Strings = Strings {
     tab_ftp_suffix: "FTP",
     ftp_disconnected: "FTP spojení bylo ukončeno.",
     ftp_login_heading: "Přihlášení k FTP",
+    tab_rdp_suffix: "RDP",
+    rdp_connecting: "Připojuji se…",
+    rdp_connected: "Připojeno",
+    rdp_disconnected: "RDP spojení bylo ukončeno.",
+    rdp_focus_window: "Přepnout na okno plochy",
+    rdp_reopen_window: "Znovu otevřít okno plochy",
+    rdp_toolbar_fullscreen: "Celá obrazovka",
+    rdp_toolbar_ctrl_alt_del: "Ctrl+Alt+Del",
+    rdp_toolbar_disconnect: "Odpojit",
     connection_gone: "Tento server už neexistuje (byl smazán nebo šlo o dočasné rychlé spojení, které skončilo se zavřením tabu).",
     btn_split_mark: "Zobrazit vedle jiného tabu (rozdělené zobrazení)",
     btn_split_unmark: "Zrušit rozdělené zobrazení",
@@ -641,7 +678,9 @@ pub const EN: Strings = Strings {
     protocol_ssh: "SSH",
     protocol_serial: "Serial port (COM)",
     protocol_ftp: "FTP",
+    protocol_rdp: "RDP (Remote Desktop)",
     ftp_use_tls_checkbox: "Use FTPS (encrypted, TLS)",
+    field_domain: "Domain (optional):",
     field_serial_port: "Port:",
     field_baud_rate: "Baud rate:",
     field_data_bits: "Data bits:",
@@ -744,6 +783,15 @@ pub const EN: Strings = Strings {
     tab_ftp_suffix: "FTP",
     ftp_disconnected: "The FTP connection was closed.",
     ftp_login_heading: "Log in to FTP",
+    tab_rdp_suffix: "RDP",
+    rdp_connecting: "Connecting…",
+    rdp_connected: "Connected",
+    rdp_disconnected: "The RDP connection was closed.",
+    rdp_focus_window: "Switch to desktop window",
+    rdp_reopen_window: "Reopen desktop window",
+    rdp_toolbar_fullscreen: "Fullscreen",
+    rdp_toolbar_ctrl_alt_del: "Ctrl+Alt+Del",
+    rdp_toolbar_disconnect: "Disconnect",
     connection_gone: "This server no longer exists (it was deleted, or it was a temporary quick connection that ended when its tab was closed).",
     btn_split_mark: "Show side by side with another tab (split view)",
     btn_split_unmark: "Turn off split view",

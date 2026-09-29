@@ -7,6 +7,7 @@ members = [
     "crates/termx-ssh",
     "crates/termx-serial",
     "crates/termx-ftp",
+    "crates/termx-rdp",
     "crates/termx-gui",
 ]
 
@@ -24,6 +25,7 @@ termx-update = { path = "crates/termx-update" }
 termx-ssh = { path = "crates/termx-ssh" }
 termx-serial = { path = "crates/termx-serial" }
 termx-ftp = { path = "crates/termx-ftp" }
+termx-rdp = { path = "crates/termx-rdp" }
 termx-gui = { path = "crates/termx-gui" }
 
 anyhow = "1"
@@ -68,6 +70,7 @@ termx-core = { workspace = true }
 termx-ssh = { workspace = true }
 termx-serial = { workspace = true }
 termx-ftp = { workspace = true }
+termx-rdp = { workspace = true }
 termx-gui = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
@@ -78,3 +81,12 @@ tracing-subscriber = { workspace = true }
 # pri buildu na/pro Windows, viz build.rs.
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
+
+# Zavislosti (NE nase vlastni crates) se i v ladicim buildu (`cargo run`
+# bez `--release`) prekladaji s optimalizacemi. Duvod: dekodovani obrazu
+# RDP (IronRDP - RemoteFX/bitmapove kodeky) je bez optimalizaci radove
+# pomalejsi - plocha se pak prekreslovala "po ctverecich" od leveho
+# horniho rohu. Nase crates zustavaji neoptimalizovane (rychly preklad,
+# plne ladeni); prvni build po teto zmene trva dele, dalsi uz ne.
+[profile.dev.package."*"]
+opt-level = 3

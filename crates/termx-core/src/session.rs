@@ -151,6 +151,13 @@ pub struct Session {
     /// ulozene servery v trezoru (bez tohoto pole) sly nadale nacist.
     #[serde(default)]
     pub ftp_use_tls: bool,
+    /// Volitelna Windows domena pro RDP prihlaseni (`Protocol::Rdp`,
+    /// viz `termx-rdp::rdp::connect`) - `None`/prazdne = zadna domena
+    /// (mistni ucet, nebo uzivatelske jmeno jiz ve tvaru `uzivatel@domena`).
+    /// U ostatnich protokolu se nepouziva. `#[serde(default)]` ze stejneho
+    /// duvodu jako `ftp_use_tls` vyse.
+    #[serde(default)]
+    pub rdp_domain: Option<String>,
 }
 
 impl Session {
@@ -171,6 +178,7 @@ impl Session {
             serial_stop_bits: None,
             serial_flow_control: None,
             ftp_use_tls: false,
+            rdp_domain: None,
         }
     }
 }

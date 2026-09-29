@@ -3,3 +3,9 @@
 .vscode/
 .idea/
 *.pdb
+
+# Lokalni vendor zavislosti (cargo vendor) - nikdy necommitovat
+/vendor/
+/vendor.tgz
+/termix-vendor.tgz
+/.cargo/

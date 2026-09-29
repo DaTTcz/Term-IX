@@ -24,7 +24,12 @@ termx-serial = { workspace = true }
 # Skutecne FTP/FTPS spojeni (`termx_ftp::spawn_ftp_session`) pro Ftp tab -
 # stejny ucel jako `termx-ssh` vyse pro SFTP, jen samostatny protokol misto
 # SSH subsystemu. Viz `ftp_browser.rs`.
+# Skutecne RDP spojeni (`termx_rdp::spawn_rdp_session`) pro Rdp tab -
+# stejny ucel jako `termx-ftp` vyse, jen pro `Protocol::Rdp`. Na rozdil od
+# ostatnich protokolu se plocha vykresluje v SAMOSTATNEM OS okne
+# (deferred viewport), ne primo v tabu - viz `rdp_viewer.rs`.
 termx-ftp = { workspace = true }
+termx-rdp = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

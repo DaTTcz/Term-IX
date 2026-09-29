@@ -37,6 +37,7 @@ mod ftp_browser;
 mod i18n;
 #[cfg(target_os = "linux")]
 mod linux_desktop;
+mod rdp_viewer;
 mod sftp_browser;
 mod splash;
 mod terminal;

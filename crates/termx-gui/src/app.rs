@@ -44,6 +44,7 @@ use uuid::Uuid;
 
 use crate::ftp_browser;
 use crate::i18n::{self, Lang};
+use crate::rdp_viewer;
 use crate::sftp_browser;
 use crate::splash;
 use crate::terminal;
@@ -254,6 +255,12 @@ enum TabKind {
     /// stejne chovani (jeden tab na session) jako `Sftp` vyse, jen pro
     /// `Protocol::Ftp` misto SSH subsystemu.
     Ftp(Uuid),
+    /// RDP relace (vzdalena plocha, viz `rdp_viewer.rs`) - stejny vzor
+    /// jako `Ftp`/`Sftp` vyse (jeden tab na session), ale na rozdil od
+    /// nich tento tab NEKRESLI vlastni plochu primo - je jen stavova
+    /// karta, samotna plocha bezi v samostatnem OS okne (egui "deferred
+    /// viewport", viz `rdp_viewer.rs` header komentar).
+    Rdp(Uuid),
 }
 
 /// Zvoleny zpusob prihlaseni v editacnich formularich pro server
@@ -471,6 +478,9 @@ struct NewSessionForm {
     /// Viz `Session::ftp_use_tls` - relevantni jen kdyz `protocol ==
     /// Protocol::Ftp`.
     ftp_use_tls: bool,
+    /// Viz `Session::rdp_domain` - relevantni jen kdyz `protocol ==
+    /// Protocol::Rdp`. Prazdne = zadna domena.
+    rdp_domain: String,
     /// `false` jen do prvniho vykresleni tohoto dialogu - pak se pole
     /// "Název:" samo fokusne, aby slo rovnou psat bez nutnosti tam
     /// nejdriv kliknout (viz pozadavek "+server , + složka, vyskakovacímu
@@ -500,6 +510,7 @@ impl Default for NewSessionForm {
             serial_stop_bits: SerialStopBits::One,
             serial_flow_control: SerialFlowControl::None,
             ftp_use_tls: false,
+            rdp_domain: String::new(),
             focus_requested: false,
         }
     }
@@ -537,6 +548,8 @@ struct EditSessionForm {
     serial_flow_control: SerialFlowControl,
     /// Viz `NewSessionForm::ftp_use_tls`.
     ftp_use_tls: bool,
+    /// Viz `NewSessionForm::rdp_domain`.
+    rdp_domain: String,
     /// Viz `NewSessionForm::focus_requested` - stejny ucel (fokus na
     /// pole "Název:" hned pri otevreni dialogu).
     focus_requested: bool,
@@ -579,6 +592,7 @@ impl EditSessionForm {
             serial_stop_bits: session.serial_stop_bits.unwrap_or(SerialStopBits::One),
             serial_flow_control: session.serial_flow_control.unwrap_or(SerialFlowControl::None),
             ftp_use_tls: session.ftp_use_tls,
+            rdp_domain: session.rdp_domain.clone().unwrap_or_default(),
             focus_requested: false,
         }
     }
@@ -615,6 +629,8 @@ struct QuickConnectForm {
     serial_flow_control: SerialFlowControl,
     /// Viz `NewSessionForm::ftp_use_tls`.
     ftp_use_tls: bool,
+    /// Viz `NewSessionForm::rdp_domain`.
+    rdp_domain: String,
     /// Viz `NewSessionForm::focus_requested`.
     focus_requested: bool,
 }
@@ -638,6 +654,7 @@ impl Default for QuickConnectForm {
             serial_stop_bits: SerialStopBits::One,
             serial_flow_control: SerialFlowControl::None,
             ftp_use_tls: false,
+            rdp_domain: String::new(),
             focus_requested: false,
         }
     }
@@ -680,6 +697,8 @@ struct HomeConnectForm {
     serial_flow_control: SerialFlowControl,
     /// Viz `NewSessionForm::ftp_use_tls`.
     ftp_use_tls: bool,
+    /// Viz `NewSessionForm::rdp_domain`.
+    rdp_domain: String,
     save: bool,
 }
 
@@ -703,6 +722,7 @@ impl Default for HomeConnectForm {
             serial_stop_bits: SerialStopBits::One,
             serial_flow_control: SerialFlowControl::None,
             ftp_use_tls: false,
+            rdp_domain: String::new(),
             save: true,
         }
     }
@@ -1237,6 +1257,10 @@ struct MainApp {
     /// Obdoba `sftp_sessions`, jen pro otevrene "Ftp" taby (viz
     /// `TabKind::Ftp`/`open_ftp_tab`).
     ftp_sessions: std::collections::HashMap<Uuid, ftp_browser::FtpBrowser>,
+    /// Obdoba `sftp_sessions`, jen pro otevrene "Rdp" taby (viz
+    /// `TabKind::Rdp`/`open_rdp_tab`) - na rozdil od nich `rdp_viewer::RdpBrowser`
+    /// navic drzi vlastni samostatne OS okno (deferred viewport), viz tam.
+    rdp_sessions: std::collections::HashMap<Uuid, rdp_viewer::RdpBrowser>,
 
     new_session_form: Option<NewSessionForm>,
     /// Editace jiz ulozeneho serveru - viz [`EditSessionForm`].
@@ -1339,6 +1363,7 @@ impl MainApp {
             terminal_sessions: std::collections::HashMap::new(),
             sftp_sessions: std::collections::HashMap::new(),
             ftp_sessions: std::collections::HashMap::new(),
+            rdp_sessions: std::collections::HashMap::new(),
             new_session_form: None,
             edit_session_form: None,
             new_folder_dialog: None,
@@ -1387,6 +1412,7 @@ impl MainApp {
             terminal_sessions: std::collections::HashMap::new(),
             sftp_sessions: std::collections::HashMap::new(),
             ftp_sessions: std::collections::HashMap::new(),
+            rdp_sessions: std::collections::HashMap::new(),
             new_session_form: None,
             edit_session_form: None,
             new_folder_dialog: None,
@@ -1553,6 +1579,10 @@ impl MainApp {
                 .find_session(id)
                 .map(|s| format!("{} ({})", s.name, tr.tab_ftp_suffix))
                 .unwrap_or_else(|| tr.tab_connection_fallback.to_string()),
+            TabKind::Rdp(id) => self
+                .find_session(id)
+                .map(|s| format!("{} ({})", s.name, tr.tab_rdp_suffix))
+                .unwrap_or_else(|| tr.tab_connection_fallback.to_string()),
         }
     }
 
@@ -1570,6 +1600,10 @@ impl MainApp {
         if let Some(session) = self.find_session(session_id) {
             if session.protocol == Protocol::Ftp {
                 self.open_ftp_tab(session_id);
+                return;
+            }
+            if session.protocol == Protocol::Rdp {
+                self.open_rdp_tab(session_id);
                 return;
             }
         }
@@ -1592,6 +1626,10 @@ impl MainApp {
         if let Some(session) = self.find_session(session_id) {
             if session.protocol == Protocol::Ftp {
                 self.open_ftp_tab(session_id);
+                return;
+            }
+            if session.protocol == Protocol::Rdp {
+                self.open_rdp_tab(session_id);
                 return;
             }
         }
@@ -1622,6 +1660,17 @@ impl MainApp {
         self.active_tab = self.tabs.len() - 1;
     }
 
+    /// Otevre (nebo aktivuje jiz otevreny) "Rdp" tab pro danou session -
+    /// viz `open_sftp_tab`/`open_ftp_tab` (stejny vzor).
+    fn open_rdp_tab(&mut self, id: Uuid) {
+        if let Some(idx) = self.tabs.iter().position(|t| matches!(t, TabKind::Rdp(sid) if *sid == id)) {
+            self.active_tab = idx;
+            return;
+        }
+        self.tabs.push(TabKind::Rdp(id));
+        self.active_tab = self.tabs.len() - 1;
+    }
+
     fn open_settings_tab(&mut self) {
         if let Some(idx) = self.tabs.iter().position(|t| matches!(t, TabKind::Settings)) {
             self.active_tab = idx;
@@ -1646,6 +1695,17 @@ impl MainApp {
         }
         if let TabKind::Ftp(id) = self.tabs[idx] {
             self.ftp_sessions.remove(&id);
+        }
+        // Zahozenim `RdpBrowser` (vc. `RdpHandle`) se zaroven ukonci i
+        // prislusne pozadi bezici RDP vlakno (zahozeni `command_tx`
+        // zpusobi, ze `command_rx.try_recv()` v `active_stage_loop`
+        // vrati `Disconnected` - viz `termx_rdp::spawn_rdp_session`) -
+        // stejny mechanismus jako `terminal_sessions`/`sftp_sessions`
+        // vyse. Prislusne OS okno (deferred viewport) tim take zmizi -
+        // dalsi snimek uz pro nej `MainApp::update` nezavola
+        // `show_viewport_deferred` (viz `render_rdp`).
+        if let TabKind::Rdp(id) = self.tabs[idx] {
+            self.rdp_sessions.remove(&id);
         }
         // Zavreny tab uz nedava smysl drzet oznaceny pro rozdelene
         // zobrazeni (viz `split_marks`/`toggle_split_mark`) - jinak by po
@@ -1744,9 +1804,15 @@ impl MainApp {
                     TabKind::Ftp(id) => self.ftp_sessions.get(&id).map(|s| s.state()),
                     _ => None,
                 };
+                // Obdoba `ftp_state`, jen pro "Rdp" taby.
+                let rdp_state = match kind {
+                    TabKind::Rdp(id) => self.rdp_sessions.get(&id).map(|s| s.state()),
+                    _ => None,
+                };
                 let is_dead = conn_state == Some(terminal::ConnState::Disconnected)
                     || sftp_state == Some(sftp_browser::SftpState::Disconnected)
-                    || ftp_state == Some(ftp_browser::FtpState::Disconnected);
+                    || ftp_state == Some(ftp_browser::FtpState::Disconnected)
+                    || rdp_state == Some(rdp_viewer::RdpState::Disconnected);
 
                 // Cely tab (puntik + nazev + zavirci "X") je JEDEN
                 // spolecny `Frame` se sdilenym pozadim - drive to byly
@@ -1868,7 +1934,8 @@ impl MainApp {
                                 if close_clicked {
                                     let is_live = conn_state == Some(terminal::ConnState::Connected)
                                         || sftp_state == Some(sftp_browser::SftpState::Connected)
-                                        || ftp_state == Some(ftp_browser::FtpState::Connected);
+                                        || ftp_state == Some(ftp_browser::FtpState::Connected)
+                                        || rdp_state == Some(rdp_viewer::RdpState::Connected);
                                     if is_live {
                                         to_confirm_close = Some(CloseTabConfirm { idx, title: title.clone() });
                                     } else {
@@ -1958,6 +2025,9 @@ impl MainApp {
             // FTP prohlizec - viz `TabKind::Sftp` vyse (stejny duvod
             // zadneho dodatecneho odsazeni).
             TabKind::Ftp(id) => self.render_ftp(ui, id),
+            // RDP stavova karta - viz `TabKind::Rdp`/`render_rdp`
+            // (samotna plocha se kresli v samostatnem OS okne, ne tady).
+            TabKind::Rdp(id) => self.render_rdp(ui, id),
         }
     }
 
@@ -2380,6 +2450,13 @@ impl MainApp {
                             {
                                 self.home_connect_form.port = "21".to_string();
                             }
+                            // Stejny "chytry" vychozi port jako u FTP vyse,
+                            // jen 3389 (RDP) - viz `Protocol::Rdp`.
+                            if ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Rdp, tr.protocol_rdp).clicked()
+                                && (self.home_connect_form.port.is_empty() || self.home_connect_form.port == "22")
+                            {
+                                self.home_connect_form.port = "3389".to_string();
+                            }
                         });
                         ui.add_space(4.0);
 
@@ -2470,6 +2547,25 @@ impl MainApp {
 
                                     ui.label("");
                                     ui.checkbox(&mut self.home_connect_form.ftp_use_tls, tr.ftp_use_tls_checkbox);
+                                    ui.end_row();
+                                }
+                                // RDP nema smysl kombinovat s privatnim
+                                // klicem (Windows RDP prihlaseni zna jen
+                                // jmeno+heslo, pripadne domenu) - stejny
+                                // duvod jako FTP vyse, jen misto FTPS
+                                // zaskrtavatka volitelna domena
+                                // (`Session::rdp_domain`).
+                                Protocol::Rdp => {
+                                    ui.label(tr.field_username);
+                                    ui.text_edit_singleline(&mut self.home_connect_form.username);
+                                    ui.end_row();
+
+                                    ui.label(tr.field_password);
+                                    ui.add(egui::TextEdit::singleline(&mut self.home_connect_form.password).password(true));
+                                    ui.end_row();
+
+                                    ui.label(tr.field_domain);
+                                    ui.text_edit_singleline(&mut self.home_connect_form.rdp_domain);
                                     ui.end_row();
                                 }
                                 _ => {
@@ -2578,6 +2674,18 @@ impl MainApp {
                 };
                 let mut session = Session::new(name, Protocol::Ftp, host, port, auth);
                 session.ftp_use_tls = self.home_connect_form.ftp_use_tls;
+                session
+            }
+            // Viz stejny duvod/POZOR jako u `Protocol::Ftp` vyse.
+            Protocol::Rdp => {
+                let port: u16 = self.home_connect_form.port.trim().parse().unwrap_or(3389);
+                let auth = AuthMethod::Password {
+                    username: self.home_connect_form.username.clone(),
+                    password: self.home_connect_form.password.clone(),
+                };
+                let mut session = Session::new(name, Protocol::Rdp, host, port, auth);
+                let domain = self.home_connect_form.rdp_domain.trim();
+                session.rdp_domain = if domain.is_empty() { None } else { Some(domain.to_string()) };
                 session
             }
             _ => {
@@ -2865,6 +2973,58 @@ impl MainApp {
         }
     }
 
+    /// RDP relace (vzdalena plocha, viz `rdp_viewer.rs`) - obdoba
+    /// `render_sftp`/`render_ftp`, ale samotna plocha se NEKRESLI tady:
+    /// tenhle tab je jen stavova karta, `RdpBrowser::render` navic (kdyz
+    /// je otevrene) kazdy snimek zavola i `show_viewport_deferred` pro
+    /// samostatne OS okno s plochou - viz `rdp_viewer.rs` header komentar.
+    fn render_rdp(&mut self, ui: &mut egui::Ui, id: Uuid) {
+        let Some(session) = self.find_session(id).cloned() else {
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                ui.label(i18n::t(self.settings.lang).connection_gone);
+            });
+            return;
+        };
+
+        if session.protocol != Protocol::Rdp {
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                ui.heading(&session.name);
+                ui.add_space(8.0);
+                ui.label(i18n::protocol_not_supported(self.settings.lang, session.protocol));
+            });
+            return;
+        }
+
+        // `ctx` se klonuje driv, nez `browser.render` potrebuje
+        // pujcit `ui` (a tedy neprimo i `ui.ctx()`) - `egui::Context`
+        // je levny na klonovani (jen `Arc`), stejny duvod jako
+        // `render_split_view` vyse.
+        let ctx = ui.ctx().clone();
+        self.rdp_sessions.entry(id).or_insert_with(|| rdp_viewer::RdpBrowser::new(&session, &ctx));
+
+        if let Some(browser) = self.rdp_sessions.get_mut(&id) {
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
+                browser.render(ui, &ctx, &session.name, self.settings.lang);
+            });
+        }
+    }
+
+    /// Okna vzdalene plochy VSECH otevrenych RDP relaci - musi se volat
+    /// kazdy snimek bez ohledu na aktivni tab: egui zavre deferred
+    /// viewport, jakmile se v nekterem snimku nezavola
+    /// `show_viewport_deferred` (V2 ho volala jen z `render_rdp`, takze
+    /// okno plochy zmizelo pri prepnuti na jiny tab).
+    fn show_rdp_windows(&mut self, ctx: &egui::Context) {
+        let lang = self.settings.lang;
+        let ids: Vec<Uuid> = self.rdp_sessions.keys().copied().collect();
+        for id in ids {
+            let name = self.find_session(id).map(|s| s.name.clone()).unwrap_or_default();
+            if let Some(browser) = self.rdp_sessions.get_mut(&id) {
+                browser.show_window(ctx, &name, lang);
+            }
+        }
+    }
+
     // -- horni menu -----------------------------------------------------
 
     fn top_menu(&mut self, ctx: &egui::Context) {
@@ -2992,6 +3152,11 @@ impl MainApp {
                     {
                         form.port = "21".to_string();
                     }
+                    if ui.selectable_value(&mut form.protocol, Protocol::Rdp, tr.protocol_rdp).clicked()
+                        && (form.port.is_empty() || form.port == "22")
+                    {
+                        form.port = "3389".to_string();
+                    }
                 });
                 ui.add_space(4.0);
 
@@ -3098,6 +3263,19 @@ impl MainApp {
                             ui.checkbox(&mut form.ftp_use_tls, tr.ftp_use_tls_checkbox);
                             ui.end_row();
                         }
+                        Protocol::Rdp => {
+                            ui.label(tr.field_username);
+                            ui.text_edit_singleline(&mut form.username);
+                            ui.end_row();
+
+                            ui.label(tr.field_password);
+                            ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
+                            ui.end_row();
+
+                            ui.label(tr.field_domain);
+                            ui.text_edit_singleline(&mut form.rdp_domain);
+                            ui.end_row();
+                        }
                         _ => {
                             render_auth_fields(
                                 ui,
@@ -3156,6 +3334,15 @@ impl MainApp {
                     session.ftp_use_tls = form.ftp_use_tls;
                     session
                 }
+                // Viz stejny duvod/POZOR jako u `Protocol::Ftp` vyse.
+                Protocol::Rdp => {
+                    let port: u16 = form.port.trim().parse().unwrap_or(3389);
+                    let auth = AuthMethod::Password { username: form.username.clone(), password: form.password.clone() };
+                    let mut session = Session::new(name, Protocol::Rdp, form.host.clone(), port, auth);
+                    let domain = form.rdp_domain.trim();
+                    session.rdp_domain = if domain.is_empty() { None } else { Some(domain.to_string()) };
+                    session
+                }
                 _ => {
                     let port: u16 = form.port.trim().parse().unwrap_or(22);
                     let auth = build_auth_method(form.auth_kind, &form.username, &form.password, &form.key_path, &form.key_passphrase);
@@ -3207,6 +3394,11 @@ impl MainApp {
                         && (form.port.is_empty() || form.port == "22")
                     {
                         form.port = "21".to_string();
+                    }
+                    if ui.selectable_value(&mut form.protocol, Protocol::Rdp, tr.protocol_rdp).clicked()
+                        && (form.port.is_empty() || form.port == "22")
+                    {
+                        form.port = "3389".to_string();
                     }
                 });
                 ui.add_space(4.0);
@@ -3291,6 +3483,19 @@ impl MainApp {
                             ui.checkbox(&mut form.ftp_use_tls, tr.ftp_use_tls_checkbox);
                             ui.end_row();
                         }
+                        Protocol::Rdp => {
+                            ui.label(tr.field_username);
+                            ui.text_edit_singleline(&mut form.username);
+                            ui.end_row();
+
+                            ui.label(tr.field_password);
+                            ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
+                            ui.end_row();
+
+                            ui.label(tr.field_domain);
+                            ui.text_edit_singleline(&mut form.rdp_domain);
+                            ui.end_row();
+                        }
                         _ => {
                             render_auth_fields(
                                 ui,
@@ -3357,6 +3562,20 @@ impl MainApp {
                         session.serial_stop_bits = None;
                         session.serial_flow_control = None;
                         session.ftp_use_tls = form.ftp_use_tls;
+                        session.rdp_domain = None;
+                    }
+                    // Viz stejny duvod/POZOR jako u `Protocol::Ftp` vyse.
+                    Protocol::Rdp => {
+                        session.port = form.port.trim().parse().unwrap_or(3389);
+                        session.auth = AuthMethod::Password { username: form.username.clone(), password: form.password.clone() };
+                        session.serial_baud_rate = None;
+                        session.serial_data_bits = None;
+                        session.serial_parity = None;
+                        session.serial_stop_bits = None;
+                        session.serial_flow_control = None;
+                        session.ftp_use_tls = false;
+                        let domain = form.rdp_domain.trim();
+                        session.rdp_domain = if domain.is_empty() { None } else { Some(domain.to_string()) };
                     }
                     _ => {
                         session.port = form.port.trim().parse().unwrap_or(22);
@@ -3367,6 +3586,7 @@ impl MainApp {
                         session.serial_stop_bits = None;
                         session.serial_flow_control = None;
                         session.ftp_use_tls = false;
+                        session.rdp_domain = None;
                     }
                 }
                 let folder = form.folder.trim();
@@ -3872,6 +4092,12 @@ impl MainApp {
                     {
                         form.port = "21".to_string();
                     }
+                    // Stejny "chytry" vychozi port jako u FTP vyse, jen 3389 (RDP) - viz `Protocol::Rdp`.
+                    if ui.selectable_value(&mut form.protocol, Protocol::Rdp, tr.protocol_rdp).clicked()
+                        && (form.port.is_empty() || form.port == "22")
+                    {
+                        form.port = "3389".to_string();
+                    }
                 });
                 ui.add_space(4.0);
 
@@ -3954,6 +4180,22 @@ impl MainApp {
                             ui.checkbox(&mut form.ftp_use_tls, tr.ftp_use_tls_checkbox);
                             ui.end_row();
                         }
+                        // Viz stejny duvod jako u FTP vyse - RDP nema
+                        // `auth_kind` (jen jmeno/heslo) a navic volitelnou
+                        // domenu.
+                        Protocol::Rdp => {
+                            ui.label(tr.field_username);
+                            ui.text_edit_singleline(&mut form.username);
+                            ui.end_row();
+
+                            ui.label(tr.field_password);
+                            ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
+                            ui.end_row();
+
+                            ui.label(tr.field_domain);
+                            ui.text_edit_singleline(&mut form.rdp_domain);
+                            ui.end_row();
+                        }
                         _ => {
                             render_auth_fields(
                                 ui,
@@ -4007,6 +4249,15 @@ impl MainApp {
                     let auth = AuthMethod::Password { username: form.username.clone(), password: form.password.clone() };
                     let mut session = Session::new(name, Protocol::Ftp, form.host.clone(), port, auth);
                     session.ftp_use_tls = form.ftp_use_tls;
+                    session
+                }
+                // Viz stejny duvod/POZOR jako u FTP vyse.
+                Protocol::Rdp => {
+                    let port: u16 = form.port.trim().parse().unwrap_or(3389);
+                    let auth = AuthMethod::Password { username: form.username.clone(), password: form.password.clone() };
+                    let mut session = Session::new(name, Protocol::Rdp, form.host.clone(), port, auth);
+                    let domain = form.rdp_domain.trim();
+                    session.rdp_domain = if domain.is_empty() { None } else { Some(domain.to_string()) };
                     session
                 }
                 _ => {
@@ -4404,12 +4655,18 @@ impl MainApp {
                     TabKind::Ftp(id) => self.ftp_sessions.get(&id).map(|s| s.state()),
                     _ => None,
                 };
+                let rdp_state = match kind {
+                    TabKind::Rdp(id) => self.rdp_sessions.get(&id).map(|s| s.state()),
+                    _ => None,
+                };
                 let is_dead = conn_state == Some(terminal::ConnState::Disconnected)
                     || sftp_state == Some(sftp_browser::SftpState::Disconnected)
-                    || ftp_state == Some(ftp_browser::FtpState::Disconnected);
+                    || ftp_state == Some(ftp_browser::FtpState::Disconnected)
+                    || rdp_state == Some(rdp_viewer::RdpState::Disconnected);
                 let is_live = conn_state == Some(terminal::ConnState::Connected)
                     || sftp_state == Some(sftp_browser::SftpState::Connected)
-                    || ftp_state == Some(ftp_browser::FtpState::Connected);
+                    || ftp_state == Some(ftp_browser::FtpState::Connected)
+                    || rdp_state == Some(rdp_viewer::RdpState::Connected);
 
                 ui.horizontal(|ui| {
                     // Mensi mezera nez vychozi mezi teckou/nazvem/"X".
@@ -4755,6 +5012,7 @@ impl MainApp {
         self.maybe_start_update_check();
         self.poll_update_check();
         self.poll_update_install();
+        self.show_rdp_windows(ctx);
 
         // Globalni zkratka Ctrl+Tab pro prepnuti fokusu mezi panely
         // rozdeleneho zobrazeni (viz `split_marks`/`render_split_view` a

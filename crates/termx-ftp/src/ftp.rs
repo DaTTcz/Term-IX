@@ -109,10 +109,7 @@ fn run_session(session: Session, cmd_rx: mpsc::Receiver<FtpCommand>, event_tx: m
         loop {
             match cmd_rx.recv() {
                 Ok(FtpCommand::Credentials { username, password }) => match stream.login(username.as_str(), password.as_str()) {
-                    Ok(()) => {
-                        authenticated = true;
-                        break;
-                    }
+                    Ok(()) => break,
                     Err(e) => {
                         let _ = event_tx.send(FtpEvent::AuthFailed(e.to_string()));
                     }

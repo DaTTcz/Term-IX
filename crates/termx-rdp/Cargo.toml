@@ -1,0 +1,79 @@
+[package]
+name = "termx-rdp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Term-IX RDP (Remote Desktop Protocol) protocol module (IronRDP - blocking, std::net::TcpStream)"
+
+[dependencies]
+termx-core = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"
+# Stejny pristup ("blokujici vlakno + std::sync::mpsc kanaly", viz `rdp.rs`)
+# jako `termx-ftp`/`termx-serial` - `ironrdp-blocking` pracuje primo nad
+# obycejnym `std::net::TcpStream` (obalenym v TLS, viz `rustls` nize), zadny
+# tokio runtime tu neni potreba (na rozdil od `termx-ssh`, ktere je async
+# kvuli `russh`).
+#
+# Verze techto crates JSOU ZAMERNE PEVNE svazane (0.10/0.11/0.9/0.2/0.9) -
+# odpovidaji si navzajem jako soucast jedne verze (0.17.0) IronRDP
+# "workspace" (viz https://github.com/Devolutions/IronRDP), NESMI se tedy
+# nezavisle na sobe povysovat bez overeni, ze si novejsi verze porad
+# odpovidaji.
+#
+# POZOR (zjisteno az skutecnym `cargo build` - viz historie): `ironrdp-graphics`
+# MUSI byt "0.9", NE "0.8" - `ironrdp-session` 0.11.0 (viz jeho vlastni
+# Cargo.toml na GitHubu) interne pouziva `ironrdp-graphics` 0.9, takze puvodni
+# "0.8" zde vytvorilo DVE ruzne, navzajem nekompatibilni instance stejneho
+# crate v zavislostnim grafu (`PixelFormat` z 0.8 != `PixelFormat` z 0.9 pro
+# ucely typove kontroly) - `DecodedImage::new` pak odmitala nas
+# `PixelFormat::RgbA32` jako "jiny typ".
+ironrdp-connector = "0.10"
+ironrdp-session = "0.11"
+ironrdp-pdu = "0.9"
+ironrdp-core = { version = "0.2", features = ["alloc"] }
+ironrdp-graphics = "0.9"
+ironrdp-blocking = "0.10"
+ironrdp-input = "0.7"
+# Display Control virtualni kanal (MS-RDPEDISP) - ziva zmena rozliseni
+# vzdalene plochy za behu (bez uplneho znovupripojeni), viz `rdp.rs`
+# (registrace `DrdynvcClient`/`DisplayControlClient` v `connect`,
+# `handle_resize`/`ActiveStage::encode_resize` v `active_stage_loop`).
+# `ironrdp-dvc` = obecna infrastruktura "Dynamic Virtual Channel" (DVC) -
+# staticky kanal "drdynvc", pres ktery se dale otevira konkretni DVC
+# (`ironrdp-displaycontrol`). Verze "0.8" u OBOU crates NENI nahodna -
+# nas pevne pripnuty `ironrdp-session` 0.11.0 interne pouziva PRESNE tyto
+# verze obou (overeno primo v jeho vlastnim Cargo.toml na GitHubu, tag
+# `ironrdp-session-v0.11.0`) - stejny duvod jako u `ironrdp-graphics`
+# vyse (jinak riziko DVOJI, vzajemne nekompatibilni instance stejneho
+# typu v zavislostnim grafu).
+ironrdp-dvc = "0.8"
+ironrdp-displaycontrol = "0.8"
+# Sitovy klient pro pripadnou Kerberos vymenu behem CredSSP (`sspi`) se
+# ZAMERNE NEDEKLARUJE jako vlastni primo zavisly crate zde (na rozdil od
+# `rustls` nize) - pouziva se vyhradne pres reexport `ironrdp_connector::sspi`,
+# aby `impl NetworkClient for NoNetworkClient` (viz `rdp.rs`) urcite
+# odpovidal presne te verzi `sspi`, kterou `ironrdp-connector` pouziva
+# interne - jinak by hrozil nesoulad verzi (`impl` z jine verze `sspi` by
+# nesplnoval trait ocekavany podpisem `connect_finalize`), stejny duvod,
+# proc `termx-ftp` pouziva `rustls` pres `suppaftp::rustls` misto vlastni
+# zavislosti.
+#
+# `rustls` (na rozdil od `sspi` vyse) zadny typ IronRDP API nesdili -
+# `ironrdp_blocking::Framed<S>` je obecne nad libovolnym `S: Read + Write`,
+# TLS stream si sestavujeme sami (viz `rdp.rs::tls_upgrade`) - primo
+# deklarovana zavislost je tu tedy bez rizika nesouladu verzi.
+# `rustls-ring` = cisty Rust TLS backend (zadny OpenSSL) - stejna volba
+# jako uz drive `termx-ftp` (`rustls-ring` pres `suppaftp`).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Parsovani DER certifikatu serveru (vytazeni verejneho klice pro CredSSP
+# "channel binding", viz `rdp.rs::extract_public_key`) - certifikat samotny
+# se (stejne jako u `termx-ftp`/`termx-ssh`, viz README "Known limitation")
+# NEOVERUJE proti zadne CA ("duveruj pri prvnim pripojeni"), jen se z nej
+# vytahne verejny klic, ktery RDP protokol vyzaduje pro dokonceni CredSSP
+# handshake.
+x509-cert = "0.2"
