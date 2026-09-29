@@ -45,6 +45,23 @@ use termx_core::{AuthMethod, Session};
 
 use crate::handler::TofuHandler;
 
+/// Zapise cely obsah souboru na server - VYTVORI ho, pokud neexistuje, a
+/// existujici ZKRATI na nulu.
+///
+/// POZOR (zjisteno az skutecnym nahranim noveho souboru): `SftpSession::write`
+/// z `russh-sftp` otevira soubor JEN s `OpenFlags::WRITE` (bez `CREATE` a
+/// `TRUNCATE`) - nahrani souboru, ktery na serveru jeste neexistoval, proto
+/// selhalo s "No such file", a prepsani existujiciho delsiho souboru kratsim
+/// by v nem nechalo zbytek puvodniho obsahu. `SftpSession::create` pouziva
+/// `CREATE | TRUNCATE | WRITE`.
+async fn write_remote_file(sftp: &SftpSession, path: &str, data: &[u8]) -> Result<(), russh_sftp::client::error::Error> {
+    use tokio::io::AsyncWriteExt as _;
+    let mut file = sftp.create(path).await?;
+    file.write_all(data).await?;
+    file.shutdown().await?;
+    Ok(())
+}
+
 /// Jedna polozka vypsaneho adresare (soubor nebo podslozka) - zjednodusene
 /// (jen to, co prohlizec v `termx-gui` skutecne potrebuje) oproti plnym
 /// `russh_sftp::protocol::FileAttributes`.
@@ -397,7 +414,7 @@ async fn run_sftp_session(
                 }
             },
             SftpCommand::Upload { local, remote } => match std::fs::read(&local) {
-                Ok(data) => match sftp.write(remote.as_str(), &data).await {
+                Ok(data) => match write_remote_file(&sftp, remote.as_str(), &data).await {
                     Ok(()) => {
                         let _ = event_tx.send(SftpEvent::Uploaded { local, remote });
                     }
@@ -462,7 +479,7 @@ async fn run_sftp_session(
                             }
                         }
                         let outcome = match std::fs::read(local_path) {
-                            Ok(data) => sftp.write(remote_path.as_str(), &data).await.map_err(|e| anyhow::anyhow!("{e}")),
+                            Ok(data) => write_remote_file(&sftp, remote_path.as_str(), &data).await.map_err(|e| anyhow::anyhow!("{e}")),
                             Err(e) => Err(anyhow::anyhow!("{e}")),
                         };
                         if let Err(e) = outcome {

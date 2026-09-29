@@ -246,7 +246,12 @@ impl RdpBrowser {
         let builder = egui::ViewportBuilder::default()
             .with_title(format!("{session_name} - RDP"))
             .with_inner_size(DEFAULT_WINDOW_SIZE)
-            .with_min_inner_size(egui::vec2(320.0, 240.0));
+            .with_min_inner_size(egui::vec2(320.0, 240.0))
+            // Stejne app_id + ikona jako hlavni okno (viz `lib.rs::run_app`/
+            // `linux_desktop`) - jinak by okno plochy na Waylandu melo
+            // genericke "W" misto ikony Term-IX.
+            .with_app_id("term-ix")
+            .with_icon(crate::app_icon());
 
         ctx.show_viewport_deferred(self.viewport_id, builder, move |ctx, _class| {
             window_ui(ctx, &shared, label_fullscreen, label_cad, label_disconnect);

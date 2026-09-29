@@ -999,6 +999,15 @@ impl TerminalSession {
                     self.send_bytes(vec![0x03]);
                     sent_input = true;
                 }
+                // Stejny problem jako `Event::Copy` vyse, jen pro Ctrl+X:
+                // egui-winit ho (`is_cut_command`) prevede na `Event::Cut`
+                // a `Event::Key` se vubec neposle - Ctrl+X (0x18) se tak
+                // nikdy nedostal na server (zpetna vazba "v nano mi
+                // nefunguje ctrl+x" - ukonceni nano).
+                egui::Event::Cut => {
+                    self.send_bytes(vec![0x18]);
+                    sent_input = true;
+                }
                 _ => {}
             }
         }

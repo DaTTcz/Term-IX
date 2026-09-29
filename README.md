@@ -13,9 +13,9 @@
 
 # Term-IX
 
-Desktopový terminálový klient pro správu vzdálených SSH spojení i lokální sériové/COM linky - napsaný v Rustu, pro Windows i Linux.
+Desktopový klient pro správu vzdálených spojení — SSH, sériová/COM linka, FTP/FTPS a vzdálená plocha Windows (RDP) — napsaný v Rustu, pro Windows i Linux.
 
-Vestavěný terminálový emulátor (SSH i sériová linka), SFTP prohlížeč souborů, strom uložených serverů se šifrovaným trezorem, info proužek se stavem serveru a rozdělené zobrazení dvou spojení vedle sebe.
+Vestavěný terminálový emulátor (SSH i sériová linka), SFTP/FTP prohlížeč souborů, vzdálená plocha v samostatném okně, strom uložených serverů se šifrovaným trezorem, info proužek se stavem serveru a rozdělené zobrazení dvou spojení vedle sebe.
 
 ---
 
@@ -24,6 +24,8 @@ Vestavěný terminálový emulátor (SSH i sériová linka), SFTP prohlížeč s
 - **Vestavěný terminál** — VT100/ANSI emulace přímo v tabu aplikace, žádné externí okno konzole
 - **SSH i sériová linka (COM/RS-232)** — připojení k SSH serverům, nebo lokálně přes sériový port s plným nastavením (rychlost, datové/stop bity, parita, řízení toku)
 - **SFTP prohlížeč souborů** — v samostatném tabu vedle terminálu, nahrávání/stahování, vytváření/mazání/přejmenování
+- **FTP / FTPS** — samostatný prohlížeč souborů, volitelně šifrovaný (explicitní TLS)
+- **Vzdálená plocha Windows (RDP)** — v samostatném okně (vlastní maximalizace/celá obrazovka), přihlášení přes NLA, rozlišení se živě přizpůsobuje velikosti okna, Ctrl+Alt+Del z lišty, psaní česky i přes AltGr
 - **Kopírování / vkládání** — označení textu tažením myši, dvojklikem (slovo) nebo trojklikem (celý řádek), automatické zkopírování, vložení přes Ctrl+v nebo pravým tlačítkem myši
 - **Více tabů a rozdělené zobrazení** — libovolný počet otevřených tabů (i vícekrát stejný server), přehled aktuálně otevřených tabů v postranním panelu, dva taby vedle sebe s přepínáním fokusu klikem nebo Ctrl+Tab
 - **Šifrovaný trezor serverů** — AES-256-GCM + Argon2id, hlavní heslo se zadává přímo v okně appky
@@ -40,7 +42,7 @@ Vestavěný terminálový emulátor (SSH i sériová linka), SFTP prohlížeč s
 
 - Windows nebo Linux
 - Ke stažení jako hotová binárka (viz níže) — žádné další závislosti k instalaci nejsou potřeba
-- Pro sestavení ze zdrojáků: [Rust](https://rustup.rs) (stable)
+- Pro sestavení ze zdrojáků: [Rust](https://rustup.rs) (stable); na Linuxu navíc `gcc`, `pkg-config` a vývojový balíček libudev (openSUSE: `systemd-devel`, Debian/Ubuntu/Mint: `libudev-dev`)
 
 ## 🚀 Instalace
 
@@ -69,7 +71,7 @@ Appka si při startu na pozadí zkontroluje, jestli na GitHubu není novější 
 
 - Uložené servery (host, port, uživatel, heslo, ...) jsou vždy **zašifrované na disku**: AES-256-GCM, klíč odvozený z hlavního hesla přes Argon2id.
 - Kdo hlavní heslo zapomene, k uloženým údajům se už nedostane — žádný reset ani "zadní vrátka" v appce záměrně nejsou.
-- **Známé omezení:** SSH modul zatím neověřuje otisk klíče serveru (žádný `known_hosts`, TOFU-accept-all) — připojí se k čemukoli, co odpoví. Doplnit před použitím na sítích, kde hrozí MITM.
+- **Známé omezení:** SSH modul zatím neověřuje otisk klíče serveru (žádný `known_hosts`, TOFU-accept-all) a FTPS/RDP neověřují TLS certifikát serveru — připojí se k čemukoli, co odpoví. Doplnit před použitím na sítích, kde hrozí MITM.
 
 ## 🏗️ Architektura
 
@@ -83,6 +85,8 @@ Přidání dalšího protokolu (např. FTP): nový crate implementující `termx
 - **Terminálový emulátor:** [alacritty_terminal](https://github.com/alacritty/alacritty) (VT100/ANSI parser)
 - **Šifrování trezoru:** AES-256-GCM + Argon2id
 - **SSH:** [russh](https://github.com/Eugeny/russh)
+- **FTP/FTPS:** [suppaftp](https://github.com/veeso/suppaftp) + rustls
+- **RDP:** [IronRDP](https://github.com/Devolutions/IronRDP) + rustls
 
 ## ⚠️ Prohlášení
 

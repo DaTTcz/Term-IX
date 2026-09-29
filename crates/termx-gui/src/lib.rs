@@ -219,6 +219,13 @@ pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry, skip_update_check:
     .map_err(|e| anyhow::anyhow!("nepodarilo se spustit graficke rozhrani: {e}"))
 }
 
+/// Ikona aplikace pro dalsi okna (napr. okno RDP plochy) - nacte se jen
+/// jednou a sdili se (`Arc`).
+pub(crate) fn app_icon() -> std::sync::Arc<egui::IconData> {
+    static ICON: std::sync::OnceLock<std::sync::Arc<egui::IconData>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| std::sync::Arc::new(load_icon())).clone()
+}
+
 fn load_icon() -> egui::IconData {
     match image::load_from_memory(ICON_BYTES) {
         Ok(img) => {

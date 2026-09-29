@@ -39,6 +39,20 @@ uuid = { workspace = true }
 serde = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true }
+# Jen kvuli zapnuti cargo features "wayland"/"x11" u `egui-winit`
+# (unifikace features - primo ho v kodu nepouzivame). `eframe` mame s
+# `default-features = false` (viz korenovy Cargo.toml), cimz se vypnuly i
+# jeho vychozi features "wayland"/"x11" - `winit` sam Wayland umi (zapina
+# ho jina zavislost), ale `egui-winit` bez feature "wayland" vubec
+# nepredava `ViewportBuilder::with_app_id` do winitu (viz
+# `create_winit_window_attributes` v egui-winit: `#[cfg(feature =
+# "wayland")] ... with_name(app_id, "")`). Okno pak na Waylandu nemelo
+# zadne app_id a KDE Plasma/GNOME k nemu nenasly `term-ix.desktop` ->
+# genericka ikona "W" misto ikony Term-IX (zjisteno na openSUSE
+# Slowroll + Plasma 6/Wayland). "x11" ze stejneho duvodu pro WM_CLASS na X11.
+# (Zapnuti pres features `eframe` - "wayland"/"x11" - by slo taky, ale
+# ty navic odkazuji na volitelne `egui-wgpu`, ktere v projektu nemame.)
+egui-winit = { version = "0.29", default-features = false, features = ["wayland", "x11"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Nativni "Ulozit jako.../Otevrit soubor..." dialog pro export/import
 # trezoru (tlacitko "Prochazet..." v prislusnych dialozich v app.rs).

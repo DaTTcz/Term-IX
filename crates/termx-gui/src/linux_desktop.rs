@@ -47,26 +47,64 @@ fn xdg_data_home() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(home).join(".local/share"))
 }
 
-/// Zapise `.desktop` soubor a vsechny velikosti ikon; zkusi (best-effort)
-/// obcerstvit `update-desktop-database`/`gtk-update-icon-cache`, at se
-/// zmena projevi hned bez nutnosti odhlaseni - kde tyto nastroje
-/// nejsou k dispozici (ne kazde DE je ma), zmena se stejne projevi pri
-/// pristim prihlaseni/restartu panelu.
+/// Zapise `.desktop` soubor a vsechny velikosti ikon. Zapisuje se JEN kdyz
+/// se obsah lisi od uz nainstalovaneho (a jen pak se obcerstvuji cache
+/// desktopu) - bez zbytecne prace pri kazdem startu.
+///
+/// Obcerstveni cache (best-effort, na pozadi - `spawn` bez cekani, at
+/// nezdrzuje start aplikace; kde nastroj neni, proste se preskoci):
+/// - `update-desktop-database`/`gtk-update-icon-cache` - GNOME/Cinnamon/...
+/// - `kbuildsycoca6`/`kbuildsycoca5` - KDE Plasma. POZOR (zjisteno na
+///   openSUSE Slowroll + Plasma/Wayland): KWin hleda ikonu okna podle
+///   app_id v databazi `.desktop` souboru "sycoca", ktera se po pridani
+///   noveho souboru do `~/.local/share/applications` nemusi hned
+///   obnovit - okno pak melo misto ikony Term-IX genericke "W"
+///   (Wayland). `kbuildsycoca6` databazi obnovi hned.
 pub fn install() {
     let Some(data_home) = xdg_data_home() else { return };
 
-    if let Err(e) = install_desktop_file(&data_home) {
-        tracing::debug!("nepodarilo se nainstalovat .desktop soubor: {e}");
+    let mut changed = false;
+    match install_desktop_file(&data_home) {
+        Ok(c) => changed |= c,
+        Err(e) => tracing::debug!("nepodarilo se nainstalovat .desktop soubor: {e}"),
     }
-    if let Err(e) = install_icons(&data_home) {
-        tracing::debug!("nepodarilo se nainstalovat ikony aplikace: {e}");
+    match install_icons(&data_home) {
+        Ok(c) => changed |= c,
+        Err(e) => tracing::debug!("nepodarilo se nainstalovat ikony aplikace: {e}"),
     }
 
-    let _ = std::process::Command::new("update-desktop-database").arg(data_home.join("applications")).output();
-    let _ = std::process::Command::new("gtk-update-icon-cache").arg(data_home.join("icons/hicolor")).output();
+    if changed {
+        let apps = data_home.join("applications");
+        let icons = data_home.join("icons/hicolor");
+        spawn_quiet("update-desktop-database", &[apps.as_os_str()]);
+        spawn_quiet("gtk-update-icon-cache", &[std::ffi::OsStr::new("-f"), std::ffi::OsStr::new("-t"), icons.as_os_str()]);
+        if !spawn_quiet("kbuildsycoca6", &[]) {
+            spawn_quiet("kbuildsycoca5", &[]);
+        }
+    }
 }
 
-fn install_desktop_file(data_home: &std::path::Path) -> std::io::Result<()> {
+/// Spusti prikaz na pozadi bez vystupu; `false` kdyz neexistuje.
+fn spawn_quiet(program: &str, args: &[&std::ffi::OsStr]) -> bool {
+    std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+/// Zapise soubor jen kdyz se jeho obsah lisi; vraci `true` pri zmene.
+fn write_if_changed(path: &std::path::Path, contents: &[u8]) -> std::io::Result<bool> {
+    if std::fs::read(path).is_ok_and(|old| old == contents) {
+        return Ok(false);
+    }
+    std::fs::write(path, contents)?;
+    Ok(true)
+}
+
+fn install_desktop_file(data_home: &std::path::Path) -> std::io::Result<bool> {
     // `Exec`/`TryExec` musi ukazovat na SKUTECNOU absolutni cestu bezici
     // binarky - zadna pevna instalacni cesta jako `/usr/bin/term-ix`
     // tu nedava smysl (aplikace nema instalator, uzivatel si ji
@@ -90,14 +128,15 @@ fn install_desktop_file(data_home: &std::path::Path) -> std::io::Result<()> {
 
     let apps_dir = data_home.join("applications");
     std::fs::create_dir_all(&apps_dir)?;
-    std::fs::write(apps_dir.join("term-ix.desktop"), contents)
+    write_if_changed(&apps_dir.join("term-ix.desktop"), contents.as_bytes())
 }
 
-fn install_icons(data_home: &std::path::Path) -> std::io::Result<()> {
+fn install_icons(data_home: &std::path::Path) -> std::io::Result<bool> {
+    let mut changed = false;
     for (size, bytes) in ICONS {
         let dir = data_home.join(format!("icons/hicolor/{size}x{size}/apps"));
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("term-ix.png"), bytes)?;
+        changed |= write_if_changed(&dir.join("term-ix.png"), bytes)?;
     }
-    Ok(())
+    Ok(changed)
 }
