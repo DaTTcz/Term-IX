@@ -785,6 +785,70 @@ impl TerminalSession {
         }
     }
 
+    /// Vlozi text ze schranky (Ctrl+V i pravy klik) - STEJNE jako
+    /// alacritty/xterm, ne jako syrove bajty.
+    ///
+    /// POZOR (zpetna vazba "při vložení do nano se mi spojily řádky"):
+    /// drive se text posilal beze zmeny, tedy s konci radku `\n` (LF,
+    /// 0x0A). Jenze LF je pro terminalovou aplikaci stisk Ctrl+J - klavesa
+    /// Enter posila CR (0x0D). V nano je Ctrl+J "Zarovnat" (justify), ktery
+    /// odstavec slil do jednoho radku. Proto (stejne jako xterm):
+    /// - vzdy: vsechny konce radku (`\r\n` i `\n`) -> `\r` (presne jako
+    ///   by uzivatel mackal Enter),
+    /// - navic "bracketed paste" (aplikace ho zapne escape sekvenci
+    ///   `ESC[?2004h` - nano, bash/readline, vim...; `alacritty_terminal`
+    ///   ho sam sleduje v `TermMode::BRACKETED_PASTE`): text se obali do
+    ///   `ESC[200~` ... `ESC[201~`, aplikace tak pozna, ze jde o vlozeny
+    ///   text (zadne automaticke odsazovani, zadne spousteni prikazu po
+    ///   radcich).
+    ///
+    /// Ostatni ridici znaky se pri vkladani ODSTRANUJI (`sanitize_paste`) -
+    /// viz tam.
+    fn paste_text(&self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let text = sanitize_paste(text);
+        if text.is_empty() {
+            return;
+        }
+        if self.term.mode().contains(TermMode::BRACKETED_PASTE) {
+            let mut bytes = b"\x1b[200~".to_vec();
+            bytes.extend_from_slice(text.as_bytes());
+            bytes.extend_from_slice(b"\x1b[201~");
+            self.send_bytes(bytes);
+        } else {
+            self.send_bytes(text.into_bytes());
+        }
+    }
+
+    /// Vyzvedne `Event::Paste` vyzadany pravym klikem na TENTO panel (viz
+    /// `render_grid` a `paste_target_id`).
+    fn take_requested_paste(&mut self, ui: &egui::Ui) {
+        if requested_paste_target(ui.ctx()) != Some(self.focus_id()) {
+            return;
+        }
+        let text = ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Paste(text) => Some(text.clone()),
+                _ => None,
+            })
+        });
+        if let Some(text) = text {
+            // Zaznam cile se smaze, ale do konce TOHOTO snimku si
+            // zapamatujeme, ze `Event::Paste` uz je vyrizeny - `handle_keyboard`
+            // (bezi az po teto funkci, se stejnymi udalostmi snimku) by ho
+            // jinak vlozil podruhe (zpetna vazba "text se vloží 2x").
+            let pass = ui.ctx().cumulative_pass_nr();
+            ui.ctx().data_mut(|d| {
+                d.remove::<(egui::Id, std::time::Instant)>(paste_target_id());
+                d.insert_temp(paste_consumed_id(), pass);
+            });
+            self.paste_text(&text);
+            self.term.scroll_display(Scroll::Bottom);
+        }
+    }
+
     fn send_bytes(&self, bytes: Vec<u8>) {
         if bytes.is_empty() {
             return;
@@ -958,8 +1022,12 @@ impl TerminalSession {
                 // `Key::V` v `key_to_bytes` nize, ktera brani tomu, aby se
                 // NAVIC poslal i syrovy ridici bajt 0x16 za tento vlozeny
                 // text.
+                // Vlozeni vyzadane pravym klikem (`paste_target_id`) si
+                // vyzvedne panel, na ktery se kliklo (`take_requested_paste`),
+                // ne panel s fokusem.
+                egui::Event::Paste(_) if requested_paste_target(ui.ctx()).is_some() || paste_consumed_this_pass(ui.ctx()) => {}
                 egui::Event::Paste(text) => {
-                    self.send_bytes(text.into_bytes());
+                    self.paste_text(&text);
                     sent_input = true;
                 }
                 // Ctrl+C/Cmd+C uz NENI vyjimka - jde vzdy primo na server
@@ -1430,30 +1498,23 @@ impl TerminalSession {
         }
 
         // Zpetna vazba "CTRL+v bychom mohli dát i kliknutí pravou myší" -
-        // klik pravym tlacitkem myslu VZDY vlozi aktualni obsah schranky
-        // (presne UX jako PuTTY a vetsina "klasickych" terminalu), bez
-        // ohledu na `focused` - jde o klik NA KONKRETNI panel, ne o
-        // globalni klavesovou udalost snimku (na rozdil od Ctrl+V), takze
-        // se prirozene tyka jen toho panelu, na ktery uzivatel skutecne
-        // klikl. Cteni schranky (na rozdil od `Context::copy_text`, ktere
-        // ma egui vestavene) resi primo `arboard` - `eframe` uz ho sam
-        // pouziva interne pro vlastni Ctrl+V, jde tedy o vyuziti uz
-        // existujici zavislosti (viz `Cargo.toml`), ne o novou.
+        // klik pravym tlacitkem VZDY vlozi aktualni obsah schranky (UX jako
+        // PuTTY), a to do panelu, na ktery se kliklo (ne nutne do toho s
+        // fokusem - viz `paste_target_id`).
         //
-        // (Predchozi pokus o tuhle funkci v0.3.4 rozbil release build,
-        // protoze zmena v `Cargo.lock` - novy primy zaznam zavislosti na
-        // `arboard` - byla dopsana rucne bez skutecneho spusteni cargo.
-        // Tentokrat se `Cargo.lock` NEUPRAVUJE rucne vubec - musi se
-        // pred tagovanim noveho vydani spustit skutecny `cargo
-        // build`/`cargo check`, aby si lockfile spravne doplnil sam.)
+        // POZOR (zjisteno na openSUSE + KDE Plasma/Wayland: "vložení pravým
+        // klikem myši nejde", Ctrl+V fungoval): drive se schranka cetla
+        // primo pres `arboard`, ktery bez feature "wayland-data-control"
+        // cte X11 schranku pres XWayland - KWin ji ale do XWaylandu
+        // synchronizuje jen kdyz ma fokus X11 okno, takze na Waylandu
+        // vracela prazdno/stary obsah. Ted se misto toho pozada backend
+        // (`ViewportCommand::RequestPaste`) - eframe precte schranku STEJNOU
+        // cestou jako pro Ctrl+V (na Waylandu `smithay-clipboard`, na
+        // X11/Windows `arboard`) a v dalsim snimku posle `Event::Paste`,
+        // ktery si tenhle panel vyzvedne v `take_requested_paste`.
         if response.secondary_clicked() {
-            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                if let Ok(text) = clipboard.get_text() {
-                    if !text.is_empty() {
-                        self.send_bytes(text.into_bytes());
-                    }
-                }
-            }
+            ui.ctx().data_mut(|d| d.insert_temp(paste_target_id(), (focus_id, std::time::Instant::now())));
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
         }
 
         // Automaticke skrolovani historie behem tazeni vyberu, kdyz mys
@@ -1566,6 +1627,7 @@ impl TerminalSession {
         // vsech ostatnich stavech beze zmeny jako drive. Cele se to navic
         // zpracuje jen kdyz je tento panel `focused` (viz komentar u
         // signatury vyse).
+        self.take_requested_paste(ui);
         if focused {
             if self.state() == ConnState::AwaitingCredentials {
                 self.handle_credentials_keyboard(ui);
@@ -2181,4 +2243,82 @@ fn ctrl_control_code(key: egui::Key) -> Option<u8> {
         _ => return None,
     };
     Some(letter & 0x1f)
+}
+
+/// Klic v `egui` docasne pameti: (`focus_id` panelu, cas) - kam ma prijit
+/// `Event::Paste` vyzadany pravym klikem (`ViewportCommand::RequestPaste`,
+/// viz `render_grid`). Po 2 s se ignoruje (kdyz je schranka prazdna,
+/// backend zadny `Event::Paste` neposle a zaznam by jinak blokoval dalsi
+/// Ctrl+V).
+fn paste_target_id() -> egui::Id {
+    egui::Id::new("termix_right_click_paste_target")
+}
+
+/// Klic: cislo snimku (`cumulative_pass_nr`), ve kterem uz
+/// `take_requested_paste` vyridil `Event::Paste` z praveho kliku.
+fn paste_consumed_id() -> egui::Id {
+    egui::Id::new("termix_right_click_paste_consumed")
+}
+
+fn paste_consumed_this_pass(ctx: &egui::Context) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|d| d.get_temp::<u64>(paste_consumed_id())) == Some(pass)
+}
+
+fn requested_paste_target(ctx: &egui::Context) -> Option<egui::Id> {
+    ctx.data(|d| d.get_temp::<(egui::Id, std::time::Instant)>(paste_target_id()))
+        .filter(|(_, at)| at.elapsed() < std::time::Duration::from_secs(2))
+        .map(|(id, _)| id)
+}
+
+/// Uprava textu ze schranky pred vlozenim do terminalu (viz
+/// `TerminalSession::paste_text`):
+/// - konce radku `\r\n`, `\n` i samotne `\r` -> `\r` (= Enter),
+/// - ponecha se tabulator (`\t`),
+/// - VSECHNY ostatni ridici znaky se zahodi: C0 (0x00-0x1F, vc. ESC, ktery
+///   by jinak mohl predcasne ukoncit "bracketed paste" nebo poslat escape
+///   sekvenci), DEL (0x7F) a C1 (U+0080-U+009F - neviditelne znaky, ktere se
+///   obcas primichaji pri kopirovani z webu/PDF; nektere terminaly je berou
+///   jako zacatek escape sekvence). V nezavorkovanem vkladani by se jinak
+///   chovaly jako stisk klaves (0x03 = Ctrl+C, 0x04 = Ctrl+D, 0x08 =
+///   Backspace, ...) - stejny druh problemu jako drive LF = Ctrl+J v nano.
+///   Bezny text vc. diakritiky/emoji zustava beze zmeny.
+fn sanitize_paste(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push('\r');
+            }
+            '\n' => out.push('\r'),
+            '\t' => out.push('\t'),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::sanitize_paste;
+
+    #[test]
+    fn line_endings_become_cr() {
+        assert_eq!(sanitize_paste("a\nb\r\nc\rd"), "a\rb\rc\rd");
+    }
+
+    #[test]
+    fn keeps_text_and_tabs() {
+        assert_eq!(sanitize_paste("//== Autor: Dávid Třubka\t✓"), "//== Autor: Dávid Třubka\t✓");
+    }
+
+    #[test]
+    fn strips_control_chars() {
+        assert_eq!(sanitize_paste("a\x03b\x1b[201~c\x7fd\u{9b}e\u{0}"), "ab[201~cde");
+    }
 }
