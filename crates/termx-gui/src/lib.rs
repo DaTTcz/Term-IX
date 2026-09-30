@@ -54,7 +54,7 @@ const ICON_BYTES: &[u8] = include_bytes!("../../../assets/icons/hicolor/128x128/
 /// `app::resize_to_main_window` ji potrebuje pri prechodu ze splashe na
 /// zamcenou obrazovku (viz tam), aby se okno po male splash velikosti
 /// (`splash::WINDOW_SIZE`) zvetsilo presne zpatky na tuto velikost.
-pub(crate) const MAIN_WINDOW_SIZE: [f32; 2] = [1150.0, 720.0];
+pub(crate) const MAIN_WINDOW_SIZE: [f32; 2] = [1280.0, 880.0];
 
 /// Normalni minimalni velikost hlavniho okna (mimo pocatecni splash fazi) -
 /// oddeleno od `MAIN_WINDOW_SIZE` jako samostatna konstanta, protoze behem

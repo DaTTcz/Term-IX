@@ -1,0 +1,19 @@
+[package]
+name = "termx-local"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Term-IX mistni (lokalni) terminal - shell spusteny v pseudoterminalu (PTY) na tomto pocitaci"
+
+[dependencies]
+termx-core = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"
+# Multiplatformni pseudoterminal (PTY) z projektu WezTerm - na Linuxu/macOS
+# klasicke openpty/forkpty, na Windows ConPTY. Stejny pristup jako vetsina
+# Rust terminalovych emulatoru; blokujici API (vlastni vlakna + mpsc
+# kanaly) - stejny vzor jako `termx-serial`.
+portable-pty = "0.9"

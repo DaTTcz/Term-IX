@@ -282,6 +282,7 @@ enum AuthKind {
 /// radky "Heslo:"), aby se stejna logika nemusela ctyrikrat kopirovat.
 /// Prazdna `key_passphrase` znamena `AuthMethod::PrivateKey.passphrase == None`
 /// (klic bez pasfraze) - viz prevod v prislusnych `submit_*` funkcich.
+#[allow(clippy::too_many_arguments)]
 fn render_auth_fields(
     ui: &mut egui::Ui,
     tr: &i18n::Strings,
@@ -290,6 +291,7 @@ fn render_auth_fields(
     password: &mut String,
     key_path: &mut String,
     key_passphrase: &mut String,
+    reveal: Option<&mut PasswordReveal>,
 ) {
     ui.label(tr.field_username);
     ui.text_edit_singleline(username);
@@ -305,7 +307,7 @@ fn render_auth_fields(
     match auth_kind {
         AuthKind::Password => {
             ui.label(tr.field_password);
-            ui.add(egui::TextEdit::singleline(password).password(true));
+            secret_field(ui, tr, password, reveal);
             ui.end_row();
         }
         AuthKind::PrivateKey => {
@@ -321,10 +323,107 @@ fn render_auth_fields(
             ui.end_row();
 
             ui.label(tr.field_key_passphrase);
-            ui.add(egui::TextEdit::singleline(key_passphrase).password(true));
+            secret_field(ui, tr, key_passphrase, reveal);
             ui.end_row();
         }
     }
+}
+
+/// Kolik chybnych pokusu o zadani hesla trezoru se toleruje, nez se
+/// zobrazeni ulozeneho hesla v danem editacnim dialogu zablokuje.
+const MAX_REVEAL_ATTEMPTS: u8 = 3;
+
+/// Stav "oka" u tajnych poli editacniho dialogu ulozeneho serveru
+/// (`EditSessionForm`) - zpetna vazba "při editaci ukázat stávající uložené
+/// heslo po znovuzadání hesla trezoru". Klik na oko otevre maly dialog
+/// pro heslo trezoru (`RevealPrompt`); teprve po spravnem zadani (max.
+/// `MAX_REVEAL_ATTEMPTS` pokusu) se heslo/pasfraze zobrazi citelne. Plati
+/// jen do zavreni editacniho dialogu (je soucasti `EditSessionForm`). V
+/// hostovskem rezimu (zadny trezor, zadne hlavni heslo) se zobrazi rovnou.
+#[derive(Default)]
+struct PasswordReveal {
+    revealed: bool,
+    /// Uzivatel prave klikl na oko (vyhodnoti se po vykresleni dialogu).
+    requested: bool,
+    failed_attempts: u8,
+    prompt: Option<RevealPrompt>,
+}
+
+impl PasswordReveal {
+    fn blocked(&self) -> bool {
+        self.failed_attempts >= MAX_REVEAL_ATTEMPTS
+    }
+}
+
+#[derive(Default)]
+struct RevealPrompt {
+    input: String,
+    error: Option<String>,
+    focus_requested: bool,
+}
+
+/// Tajne textove pole (heslo/pasfraze). S `reveal` navic tlacitko s okem
+/// (viz `PasswordReveal`), bez nej obycejne maskovane pole jako drive.
+fn secret_field(ui: &mut egui::Ui, tr: &i18n::Strings, value: &mut String, reveal: Option<&mut PasswordReveal>) {
+    let Some(reveal) = reveal else {
+        ui.add(egui::TextEdit::singleline(value).password(true));
+        return;
+    };
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(value).password(!reveal.revealed));
+        let tooltip = if reveal.revealed {
+            tr.reveal_password_hide
+        } else if reveal.blocked() {
+            tr.reveal_password_blocked
+        } else {
+            tr.reveal_password_show
+        };
+        let response = eye_button(ui, reveal.revealed, !reveal.blocked() || reveal.revealed).on_hover_text(tooltip);
+        if response.clicked() {
+            if reveal.revealed {
+                reveal.revealed = false;
+            } else if !reveal.blocked() {
+                reveal.requested = true;
+            }
+        }
+    });
+}
+
+/// Male tlacitko s rucne kreslenym okem (stejny pristup jako ikony v
+/// `sftp_browser`/`ftp_browser` - zadny ikonovy font). `revealed` = oko
+/// preskrtnute (klik heslo zase skryje).
+fn eye_button(ui: &mut egui::Ui, revealed: bool, enabled: bool) -> egui::Response {
+    let size = egui::vec2(ui.spacing().interact_size.y * 1.2, ui.spacing().interact_size.y);
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        if response.hovered() && enabled {
+            ui.painter().rect(rect, visuals.rounding, visuals.weak_bg_fill, visuals.bg_stroke);
+        }
+        let color = if enabled { visuals.fg_stroke.color } else { visuals.fg_stroke.color.gamma_multiply(0.4) };
+        let stroke = egui::Stroke::new(1.4_f32, color);
+        let c = rect.center();
+        let w = rect.height() * 0.42;
+        let h = rect.height() * 0.24;
+        // Obrys oka - dve paraboly (horni a dolni vicko).
+        let steps = 16;
+        let lid = |sign: f32| -> Vec<egui::Pos2> {
+            (0..=steps)
+                .map(|i| {
+                    let t = i as f32 / steps as f32 * 2.0 - 1.0;
+                    egui::pos2(c.x + t * w, c.y + sign * h * (1.0 - t * t))
+                })
+                .collect()
+        };
+        ui.painter().add(egui::Shape::line(lid(-1.0), stroke));
+        ui.painter().add(egui::Shape::line(lid(1.0), stroke));
+        ui.painter().circle_filled(c, h * 0.55, color);
+        if revealed {
+            ui.painter().line_segment([egui::pos2(c.x - w, c.y + w * 0.8), egui::pos2(c.x + w, c.y - w * 0.8)], stroke);
+        }
+    }
+    response
 }
 
 /// Sestavi `AuthMethod` z hodnot formulare (viz `render_auth_fields`) -
@@ -553,6 +652,8 @@ struct EditSessionForm {
     /// Viz `NewSessionForm::focus_requested` - stejny ucel (fokus na
     /// pole "Název:" hned pri otevreni dialogu).
     focus_requested: bool,
+    /// Oko u hesla/pasfraze - viz `PasswordReveal`.
+    reveal: PasswordReveal,
 }
 
 impl EditSessionForm {
@@ -594,6 +695,7 @@ impl EditSessionForm {
             ftp_use_tls: session.ftp_use_tls,
             rdp_domain: session.rdp_domain.clone().unwrap_or_default(),
             focus_requested: false,
+            reveal: PasswordReveal::default(),
         }
     }
 }
@@ -2395,234 +2497,254 @@ impl MainApp {
     fn render_home(&mut self, ui: &mut egui::Ui) {
         let logo = self.logo_texture(ui.ctx());
         let mut submit = false;
+        let mut open_local = false;
         let tr = i18n::t(self.settings.lang);
 
-        ui.vertical_centered(|ui| {
-            ui.add_space(24.0);
-            ui.heading(tr.home_heading);
-            ui.add_space(10.0);
-
-            // `egui::Grid` bohuzel neni "center-aware" - i uvnitr
-            // `vertical_centered` (viz vyse) zacina vzdy uplne vlevo v
-            // ramci dostupne sirky sveho rodice (drzi se `ui.cursor()`,
-            // ne stredoveho zarovnani jako normalni jednotlive widgety),
-            // proto na obrazovce vysel formular pribity k levemu okraji
-            // ("formulář dáme na střed"). Oprava: Grid se vlozi do
-            // vlastniho `ui` s pevnou sirkou (`HOME_FORM_WIDTH`), pred
-            // ktere se rucne vlozi polovina zbyvajiciho prostoru
-            // (`ui.add_space`) - tim se cely blok manualne vystredi bez
-            // ohledu na to, jak siroke zrovna Home tab je.
-            const HOME_FORM_WIDTH: f32 = 340.0;
-            let known_folders = self.known_folder_paths();
-            let known_names = self.known_session_names();
-            let known_hosts = self.known_hosts();
-            ui.horizontal(|ui| {
-                let avail = ui.available_width();
-                if avail > HOME_FORM_WIDTH {
-                    ui.add_space((avail - HOME_FORM_WIDTH) / 2.0);
+        // Cely Home tab je posuvny - na mensim okne/obrazovce se jinak obsah
+        // pod logem (verze, autor, kontrola aktualizaci) orizl bez moznosti
+        // se k nemu dostat.
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(24.0);
+                ui.heading(tr.home_heading);
+                ui.add_space(10.0);
+                if ui.button(tr.btn_open_local_terminal).clicked() {
+                    open_local = true;
                 }
-                let term_type_suggestions = term_type_suggestions();
-                ui.allocate_ui(egui::vec2(HOME_FORM_WIDTH, 0.0), |ui| {
-                    // `allocate_ui` dedi layout rodicovskeho Ui - tady je
-                    // to `ui.horizontal` o par radku vyse (kvuli
-                    // vystredeni), takze bez explicitniho `ui.vertical`
-                    // by se prepinac Protokolu a Grid vykreslily VEDLE
-                    // sebe (jako dva prvky v left-to-right layoutu)
-                    // misto pod sebou - presne tenhle bug nahlasen jako
-                    // "máme to nějaké rozházené".
-                    ui.vertical(|ui| {
-                        // Prepinac protokolu - viz stejny prvek/duvod v
-                        // `show_new_session_dialog` (zpetna vazba "aha já
-                        // ho hledal v rychlém spojení" - COM port ma byt
-                        // dostupny odkudkoliv, kde se dnes zaklada
-                        // spojeni, ne jen v dialogu Novy/Upravit server).
-                        ui.horizontal(|ui| {
-                            ui.label(tr.field_protocol);
-                            ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Ssh, tr.protocol_ssh);
-                            ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Serial, tr.protocol_serial);
-                            // Kdyz uzivatel prave prepnul na FTP a port je
-                            // porad na SSH vychozi hodnote (nebo prazdny),
-                            // rovnou ho posuneme na obvykly FTP port 21 -
-                            // stejny "chytry" vychozi pattern u vsech 4
-                            // formularu (viz `show_new_session_dialog` atd.).
-                            if ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Ftp, tr.protocol_ftp).clicked()
-                                && (self.home_connect_form.port.is_empty() || self.home_connect_form.port == "22")
-                            {
-                                self.home_connect_form.port = "21".to_string();
-                            }
-                            // Stejny "chytry" vychozi port jako u FTP vyse,
-                            // jen 3389 (RDP) - viz `Protocol::Rdp`.
-                            if ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Rdp, tr.protocol_rdp).clicked()
-                                && (self.home_connect_form.port.is_empty() || self.home_connect_form.port == "22")
-                            {
-                                self.home_connect_form.port = "3389".to_string();
-                            }
-                        });
-                        ui.add_space(4.0);
+                ui.add_space(10.0);
 
-                        // Viz stejne rozdeleni na 2 Gridy (strukturni vs.
-                        // pripojovaci udaje) v `show_new_session_dialog`.
-                        egui::Grid::new("home_connect_grid_identity").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                            ui.label(tr.field_name);
-                            grid_field_with_suggestions(ui, &mut self.home_connect_form.name, &known_names);
-
-                            // Slozka dava smysl jen kdyz se bude i ukladat
-                            // (viz `save` nize) - u hosta (zadny trezor) i u
-                            // docasneho rychleho spojeni (`save == false`)
-                            // se radek vubec nezobrazi.
-                            if !self.is_guest && self.home_connect_form.save {
-                                ui.label(tr.field_folder);
-                                grid_field_with_suggestions(ui, &mut self.home_connect_form.folder, &known_folders);
-                            }
-                        });
-
-                        ui.add_space(10.0);
-                        ui.separator();
-                        ui.add_space(10.0);
-
-                        egui::Grid::new("home_connect_grid_connection").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                            match self.home_connect_form.protocol {
-                                Protocol::Serial => {
-                                    let port_suggestions = termx_serial::available_ports();
-                                    ui.label(tr.field_serial_port);
-                                    // POZOR: `grid_field_with_suggestions` uz
-                                    // sam interne konci svuj radek
-                                    // (`ui.end_row()`) - dalsi `ui.end_row()`
-                                    // by pridal navic prazdny radek (viz
-                                    // nahlasena "mezera mezi portem a
-                                    // rychlostí").
-                                    grid_field_with_suggestions(ui, &mut self.home_connect_form.host, &port_suggestions);
-
-                                    render_serial_config_fields(
-                                        ui,
-                                        tr,
-                                        "home_connect_serial",
-                                        &mut self.home_connect_form.serial_baud_rate,
-                                        &mut self.home_connect_form.serial_data_bits,
-                                        &mut self.home_connect_form.serial_parity,
-                                        &mut self.home_connect_form.serial_stop_bits,
-                                        &mut self.home_connect_form.serial_flow_control,
-                                    );
+                // `egui::Grid` bohuzel neni "center-aware" - i uvnitr
+                // `vertical_centered` (viz vyse) zacina vzdy uplne vlevo v
+                // ramci dostupne sirky sveho rodice (drzi se `ui.cursor()`,
+                // ne stredoveho zarovnani jako normalni jednotlive widgety),
+                // proto na obrazovce vysel formular pribity k levemu okraji
+                // ("formulář dáme na střed"). Oprava: Grid se vlozi do
+                // vlastniho `ui` s pevnou sirkou (`HOME_FORM_WIDTH`), pred
+                // ktere se rucne vlozi polovina zbyvajiciho prostoru
+                // (`ui.add_space`) - tim se cely blok manualne vystredi bez
+                // ohledu na to, jak siroke zrovna Home tab je.
+                const HOME_FORM_WIDTH: f32 = 340.0;
+                let known_folders = self.known_folder_paths();
+                let known_names = self.known_session_names();
+                let known_hosts = self.known_hosts();
+                ui.horizontal(|ui| {
+                    let avail = ui.available_width();
+                    if avail > HOME_FORM_WIDTH {
+                        ui.add_space((avail - HOME_FORM_WIDTH) / 2.0);
+                    }
+                    let term_type_suggestions = term_type_suggestions();
+                    ui.allocate_ui(egui::vec2(HOME_FORM_WIDTH, 0.0), |ui| {
+                        // `allocate_ui` dedi layout rodicovskeho Ui - tady je
+                        // to `ui.horizontal` o par radku vyse (kvuli
+                        // vystredeni), takze bez explicitniho `ui.vertical`
+                        // by se prepinac Protokolu a Grid vykreslily VEDLE
+                        // sebe (jako dva prvky v left-to-right layoutu)
+                        // misto pod sebou - presne tenhle bug nahlasen jako
+                        // "máme to nějaké rozházené".
+                        ui.vertical(|ui| {
+                            // Prepinac protokolu - viz stejny prvek/duvod v
+                            // `show_new_session_dialog` (zpetna vazba "aha já
+                            // ho hledal v rychlém spojení" - COM port ma byt
+                            // dostupny odkudkoliv, kde se dnes zaklada
+                            // spojeni, ne jen v dialogu Novy/Upravit server).
+                            ui.horizontal(|ui| {
+                                ui.label(tr.field_protocol);
+                                ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Serial, tr.protocol_serial);
+                                // Kdyz uzivatel prave prepnul na FTP a port je
+                                // porad na SSH vychozi hodnote (nebo prazdny),
+                                // rovnou ho posuneme na obvykly FTP port 21 -
+                                // stejny "chytry" vychozi pattern u vsech 4
+                                // formularu (viz `show_new_session_dialog` atd.).
+                                if ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Ftp, tr.protocol_ftp).clicked()
+                                    && (self.home_connect_form.port.is_empty() || self.home_connect_form.port == "22" || self.home_connect_form.port == "3389")
+                                {
+                                    self.home_connect_form.port = "21".to_string();
                                 }
-                                _ => {
-                                    ui.label(tr.field_host);
-                                    grid_field_with_suggestions(ui, &mut self.home_connect_form.host, &known_hosts);
-
-                                    ui.label(tr.field_port);
-                                    ui.text_edit_singleline(&mut self.home_connect_form.port);
-                                    ui.end_row();
+                                // Stejny "chytry" vychozi port jako u FTP vyse,
+                                // jen 3389 (RDP) - viz `Protocol::Rdp`.
+                                if ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Rdp, tr.protocol_rdp).clicked()
+                                    && (self.home_connect_form.port.is_empty() || self.home_connect_form.port == "22" || self.home_connect_form.port == "21")
+                                {
+                                    self.home_connect_form.port = "3389".to_string();
                                 }
-                            }
-
-                            // Typ terminalu (a jeho napoveda) jsou zamerne
-                            // hned za Portem, PRED prihlasovacimi udaji -
-                            // viz zpetna vazba "tady bych ten dropdown typ
-                            // terminálu" (napoveda drive vychazela mimo
-                            // Grid, az za vsemi radky vcetne Hesla, coz
-                            // vizualne vypadalo, jako by patrila k jinemu
-                            // policku).
-                            ui.label(tr.field_term_type);
-                            grid_field_term_type_dropdown(
-                                ui,
-                                "home_connect_term_type",
-                                &mut self.home_connect_form.term_type,
-                                &term_type_suggestions,
-                            );
-
-                            match self.home_connect_form.protocol {
-                                Protocol::Serial => {}
-                                // FTP nema smysl kombinovat s prihlasenim
-                                // privatnim klicem (`AuthKind::PrivateKey`) -
-                                // misto sdileneho `render_auth_fields` (SSH/
-                                // vychozi) proto jen prime jmeno/heslo +
-                                // zaskrtavatko FTPS (viz `Session::ftp_use_tls`).
-                                Protocol::Ftp => {
-                                    ui.label(tr.field_username);
-                                    ui.text_edit_singleline(&mut self.home_connect_form.username);
-                                    ui.end_row();
-
-                                    ui.label(tr.field_password);
-                                    ui.add(egui::TextEdit::singleline(&mut self.home_connect_form.password).password(true));
-                                    ui.end_row();
-
-                                    ui.label("");
-                                    ui.checkbox(&mut self.home_connect_form.ftp_use_tls, tr.ftp_use_tls_checkbox);
-                                    ui.end_row();
+                                // Poradi podle abecedy (COM, FTP, RDP, SSH) - SSH zustava vychozi.
+                                // Navrat na SSH z FTP/RDP vrati i port na 22.
+                                if ui.selectable_value(&mut self.home_connect_form.protocol, Protocol::Ssh, tr.protocol_ssh).clicked()
+                                    && (self.home_connect_form.port.is_empty() || self.home_connect_form.port == "21" || self.home_connect_form.port == "3389")
+                                {
+                                    self.home_connect_form.port = "22".to_string();
                                 }
-                                // RDP nema smysl kombinovat s privatnim
-                                // klicem (Windows RDP prihlaseni zna jen
-                                // jmeno+heslo, pripadne domenu) - stejny
-                                // duvod jako FTP vyse, jen misto FTPS
-                                // zaskrtavatka volitelna domena
-                                // (`Session::rdp_domain`).
-                                Protocol::Rdp => {
-                                    ui.label(tr.field_username);
-                                    ui.text_edit_singleline(&mut self.home_connect_form.username);
-                                    ui.end_row();
+                            });
+                            ui.add_space(4.0);
 
-                                    ui.label(tr.field_password);
-                                    ui.add(egui::TextEdit::singleline(&mut self.home_connect_form.password).password(true));
-                                    ui.end_row();
+                            // Viz stejne rozdeleni na 2 Gridy (strukturni vs.
+                            // pripojovaci udaje) v `show_new_session_dialog`.
+                            egui::Grid::new("home_connect_grid_identity").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                                ui.label(tr.field_name);
+                                grid_field_with_suggestions(ui, &mut self.home_connect_form.name, &known_names);
 
-                                    ui.label(tr.field_domain);
-                                    ui.text_edit_singleline(&mut self.home_connect_form.rdp_domain);
-                                    ui.end_row();
+                                // Slozka dava smysl jen kdyz se bude i ukladat
+                                // (viz `save` nize) - u hosta (zadny trezor) i u
+                                // docasneho rychleho spojeni (`save == false`)
+                                // se radek vubec nezobrazi.
+                                if !self.is_guest && self.home_connect_form.save {
+                                    ui.label(tr.field_folder);
+                                    grid_field_with_suggestions(ui, &mut self.home_connect_form.folder, &known_folders);
                                 }
-                                _ => {
-                                    render_auth_fields(
-                                        ui,
-                                        tr,
-                                        &mut self.home_connect_form.auth_kind,
-                                        &mut self.home_connect_form.username,
-                                        &mut self.home_connect_form.password,
-                                        &mut self.home_connect_form.key_path,
-                                        &mut self.home_connect_form.key_passphrase,
-                                    );
+                            });
+
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.add_space(10.0);
+
+                            egui::Grid::new("home_connect_grid_connection").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                                match self.home_connect_form.protocol {
+                                    Protocol::Serial => {
+                                        let port_suggestions = termx_serial::available_ports();
+                                        ui.label(tr.field_serial_port);
+                                        // POZOR: `grid_field_with_suggestions` uz
+                                        // sam interne konci svuj radek
+                                        // (`ui.end_row()`) - dalsi `ui.end_row()`
+                                        // by pridal navic prazdny radek (viz
+                                        // nahlasena "mezera mezi portem a
+                                        // rychlostí").
+                                        grid_field_with_suggestions(ui, &mut self.home_connect_form.host, &port_suggestions);
+
+                                        render_serial_config_fields(
+                                            ui,
+                                            tr,
+                                            "home_connect_serial",
+                                            &mut self.home_connect_form.serial_baud_rate,
+                                            &mut self.home_connect_form.serial_data_bits,
+                                            &mut self.home_connect_form.serial_parity,
+                                            &mut self.home_connect_form.serial_stop_bits,
+                                            &mut self.home_connect_form.serial_flow_control,
+                                        );
+                                    }
+                                    _ => {
+                                        ui.label(tr.field_host);
+                                        grid_field_with_suggestions(ui, &mut self.home_connect_form.host, &known_hosts);
+
+                                        ui.label(tr.field_port);
+                                        ui.text_edit_singleline(&mut self.home_connect_form.port);
+                                        ui.end_row();
+                                    }
                                 }
-                            }
+
+                                // Typ terminalu (a jeho napoveda) jsou zamerne
+                                // hned za Portem, PRED prihlasovacimi udaji -
+                                // viz zpetna vazba "tady bych ten dropdown typ
+                                // terminálu" (napoveda drive vychazela mimo
+                                // Grid, az za vsemi radky vcetne Hesla, coz
+                                // vizualne vypadalo, jako by patrila k jinemu
+                                // policku).
+                                ui.label(tr.field_term_type);
+                                grid_field_term_type_dropdown(
+                                    ui,
+                                    "home_connect_term_type",
+                                    &mut self.home_connect_form.term_type,
+                                    &term_type_suggestions,
+                                );
+
+                                match self.home_connect_form.protocol {
+                                    Protocol::Serial => {}
+                                    // FTP nema smysl kombinovat s prihlasenim
+                                    // privatnim klicem (`AuthKind::PrivateKey`) -
+                                    // misto sdileneho `render_auth_fields` (SSH/
+                                    // vychozi) proto jen prime jmeno/heslo +
+                                    // zaskrtavatko FTPS (viz `Session::ftp_use_tls`).
+                                    Protocol::Ftp => {
+                                        ui.label(tr.field_username);
+                                        ui.text_edit_singleline(&mut self.home_connect_form.username);
+                                        ui.end_row();
+
+                                        ui.label(tr.field_password);
+                                        ui.add(egui::TextEdit::singleline(&mut self.home_connect_form.password).password(true));
+                                        ui.end_row();
+
+                                        ui.label("");
+                                        ui.checkbox(&mut self.home_connect_form.ftp_use_tls, tr.ftp_use_tls_checkbox);
+                                        ui.end_row();
+                                    }
+                                    // RDP nema smysl kombinovat s privatnim
+                                    // klicem (Windows RDP prihlaseni zna jen
+                                    // jmeno+heslo, pripadne domenu) - stejny
+                                    // duvod jako FTP vyse, jen misto FTPS
+                                    // zaskrtavatka volitelna domena
+                                    // (`Session::rdp_domain`).
+                                    Protocol::Rdp => {
+                                        ui.label(tr.field_username);
+                                        ui.text_edit_singleline(&mut self.home_connect_form.username);
+                                        ui.end_row();
+
+                                        ui.label(tr.field_password);
+                                        ui.add(egui::TextEdit::singleline(&mut self.home_connect_form.password).password(true));
+                                        ui.end_row();
+
+                                        ui.label(tr.field_domain);
+                                        ui.text_edit_singleline(&mut self.home_connect_form.rdp_domain);
+                                        ui.end_row();
+                                    }
+                                    _ => {
+                                        render_auth_fields(
+                                            ui,
+                                            tr,
+                                            &mut self.home_connect_form.auth_kind,
+                                            &mut self.home_connect_form.username,
+                                            &mut self.home_connect_form.password,
+                                            &mut self.home_connect_form.key_path,
+                                            &mut self.home_connect_form.key_passphrase,
+                                            None,
+                                        );
+                                    }
+                                }
+                            });
                         });
                     });
                 });
+
+                ui.add_space(6.0);
+                if self.is_guest {
+                    // V hostovskem rezimu neni kam ukladat - zadny checkbox,
+                    // rovnou jen vysvetlujici poznamka (`save` uz je natvrdo
+                    // `false` z `MainApp::new_guest`).
+                    ui.label(egui::RichText::new(tr.home_guest_note).small());
+                } else {
+                    ui.checkbox(&mut self.home_connect_form.save, tr.home_save_checkbox);
+                    ui.label(egui::RichText::new(tr.home_save_hint).small());
+                }
+
+                ui.add_space(10.0);
+                if ui.add_enabled(!self.home_connect_form.host.trim().is_empty(), egui::Button::new(tr.btn_connect)).clicked() {
+                    submit = true;
+                }
+
+                ui.add_space(20.0);
+                ui.separator();
+                ui.add_space(16.0);
+
+                if let Some(logo) = logo {
+                    // Zpetna vazba "logo můžeme ukázat větší na Domácím TABu" a
+                    // pak "na hometabu bych použil term-ix_logo.png je tam i
+                    // název pěkně v obrázku" - `LOGO_BYTES` uz je cely
+                    // "wordmark" (znacka + napis "TERM-IX" v jednom obrazku),
+                    // takze samostatny `ui.heading("Term-IX")` pod nim by uz
+                    // byl zbytecne duplicitni a byl odstranen.
+                    ui.add(egui::Image::new(&logo).max_size(egui::vec2(220.0, 220.0)));
+                    ui.add_space(8.0);
+                }
+                ui.label(format!("{} {}", tr.version_label, env!("CARGO_PKG_VERSION")));
+                ui.label(egui::RichText::new(tr.about_author).small());
+                ui.label(egui::RichText::new(tr.about_written_in_rust).small());
+                ui.add_space(10.0);
+
+                self.render_update_check_status(ui);
             });
-
-            ui.add_space(6.0);
-            if self.is_guest {
-                // V hostovskem rezimu neni kam ukladat - zadny checkbox,
-                // rovnou jen vysvetlujici poznamka (`save` uz je natvrdo
-                // `false` z `MainApp::new_guest`).
-                ui.label(egui::RichText::new(tr.home_guest_note).small());
-            } else {
-                ui.checkbox(&mut self.home_connect_form.save, tr.home_save_checkbox);
-                ui.label(egui::RichText::new(tr.home_save_hint).small());
-            }
-
-            ui.add_space(10.0);
-            if ui.add_enabled(!self.home_connect_form.host.trim().is_empty(), egui::Button::new(tr.btn_connect)).clicked() {
-                submit = true;
-            }
-
-            ui.add_space(20.0);
-            ui.separator();
-            ui.add_space(16.0);
-
-            if let Some(logo) = logo {
-                // Zpetna vazba "logo můžeme ukázat větší na Domácím TABu" a
-                // pak "na hometabu bych použil term-ix_logo.png je tam i
-                // název pěkně v obrázku" - `LOGO_BYTES` uz je cely
-                // "wordmark" (znacka + napis "TERM-IX" v jednom obrazku),
-                // takze samostatny `ui.heading("Term-IX")` pod nim by uz
-                // byl zbytecne duplicitni a byl odstranen.
-                ui.add(egui::Image::new(&logo).max_size(egui::vec2(220.0, 220.0)));
-                ui.add_space(8.0);
-            }
-            ui.label(format!("{} {}", tr.version_label, env!("CARGO_PKG_VERSION")));
-            ui.label(egui::RichText::new(tr.about_author).small());
-            ui.label(egui::RichText::new(tr.about_written_in_rust).small());
-            ui.add_space(10.0);
-
-            self.render_update_check_status(ui);
         });
 
+        if open_local {
+            self.open_local_terminal();
+        }
         if submit {
             self.submit_home_connect();
         }
@@ -2639,6 +2761,18 @@ impl MainApp {
     /// `self.ad_hoc_sessions`, `self.open_session_tab`) - stejny duvod,
     /// proc `render_connection` drive kopiruje (`.cloned()`) session
     /// misto drzeni reference.
+    /// Otevre novy tab s mistnim terminalem (shell na tomto pocitaci, viz
+    /// `termx-local`) - docasna session (`ad_hoc_sessions`, neuklada se do
+    /// trezoru), kazde kliknuti = novy tab s novym shellem.
+    fn open_local_terminal(&mut self) {
+        let tr = i18n::t(self.settings.lang);
+        let name = format!("{} ({})", tr.local_terminal_tab_name, termx_local::default_shell_label());
+        let session = Session::new(name, Protocol::Local, String::new(), 0, AuthMethod::None);
+        let id = session.id;
+        self.ad_hoc_sessions.push(session);
+        self.open_session_tab(id);
+    }
+
     fn submit_home_connect(&mut self) {
         let host = self.home_connect_form.host.trim().to_string();
         if host.is_empty() {
@@ -2862,7 +2996,7 @@ impl MainApp {
         // přes COM/sériový port jako další 'plugin'") - SFTP prohlizec
         // (`render_sftp` nize) zustava jen pro SSH (potrebuje SFTP
         // podsystem, ktery seriova linka nema).
-        if !matches!(session.protocol, Protocol::Ssh | Protocol::Serial) {
+        if !matches!(session.protocol, Protocol::Ssh | Protocol::Serial | Protocol::Local) {
             egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 8.0)).show(ui, |ui| {
                 ui.heading(&session.name);
                 ui.add_space(8.0);
@@ -3056,6 +3190,10 @@ impl MainApp {
                         self.quick_connect_form = Some(QuickConnectForm::default());
                         ui.close_menu();
                     }
+                    if ui.button(tr.menu_sessions_local_terminal).clicked() {
+                        self.open_local_terminal();
+                        ui.close_menu();
+                    }
                 });
                 // Obsah viz pozadavek "Zobrazení bych dal jak navrhuješ" -
                 // velikost pisma terminalu, cela obrazovka, rychle
@@ -3145,17 +3283,23 @@ impl MainApp {
                 // se v Gridu nize vubec zobrazi.
                 ui.horizontal(|ui| {
                     ui.label(tr.field_protocol);
-                    ui.selectable_value(&mut form.protocol, Protocol::Ssh, tr.protocol_ssh);
                     ui.selectable_value(&mut form.protocol, Protocol::Serial, tr.protocol_serial);
                     if ui.selectable_value(&mut form.protocol, Protocol::Ftp, tr.protocol_ftp).clicked()
-                        && (form.port.is_empty() || form.port == "22")
+                        && (form.port.is_empty() || form.port == "22" || form.port == "3389")
                     {
                         form.port = "21".to_string();
                     }
                     if ui.selectable_value(&mut form.protocol, Protocol::Rdp, tr.protocol_rdp).clicked()
-                        && (form.port.is_empty() || form.port == "22")
+                        && (form.port.is_empty() || form.port == "22" || form.port == "21")
                     {
                         form.port = "3389".to_string();
+                    }
+                    // Poradi podle abecedy (COM, FTP, RDP, SSH) - SSH zustava vychozi.
+                    // Navrat na SSH z FTP/RDP vrati i port na 22.
+                    if ui.selectable_value(&mut form.protocol, Protocol::Ssh, tr.protocol_ssh).clicked()
+                        && (form.port.is_empty() || form.port == "21" || form.port == "3389")
+                    {
+                        form.port = "22".to_string();
                     }
                 });
                 ui.add_space(4.0);
@@ -3285,6 +3429,7 @@ impl MainApp {
                                 &mut form.password,
                                 &mut form.key_path,
                                 &mut form.key_passphrase,
+                                None,
                             );
                         }
                     }
@@ -3388,17 +3533,23 @@ impl MainApp {
                 // `show_new_session_dialog`.
                 ui.horizontal(|ui| {
                     ui.label(tr.field_protocol);
-                    ui.selectable_value(&mut form.protocol, Protocol::Ssh, tr.protocol_ssh);
                     ui.selectable_value(&mut form.protocol, Protocol::Serial, tr.protocol_serial);
                     if ui.selectable_value(&mut form.protocol, Protocol::Ftp, tr.protocol_ftp).clicked()
-                        && (form.port.is_empty() || form.port == "22")
+                        && (form.port.is_empty() || form.port == "22" || form.port == "3389")
                     {
                         form.port = "21".to_string();
                     }
                     if ui.selectable_value(&mut form.protocol, Protocol::Rdp, tr.protocol_rdp).clicked()
-                        && (form.port.is_empty() || form.port == "22")
+                        && (form.port.is_empty() || form.port == "22" || form.port == "21")
                     {
                         form.port = "3389".to_string();
+                    }
+                    // Poradi podle abecedy (COM, FTP, RDP, SSH) - SSH zustava vychozi.
+                    // Navrat na SSH z FTP/RDP vrati i port na 22.
+                    if ui.selectable_value(&mut form.protocol, Protocol::Ssh, tr.protocol_ssh).clicked()
+                        && (form.port.is_empty() || form.port == "21" || form.port == "3389")
+                    {
+                        form.port = "22".to_string();
                     }
                 });
                 ui.add_space(4.0);
@@ -3476,7 +3627,7 @@ impl MainApp {
                             ui.end_row();
 
                             ui.label(tr.field_password);
-                            ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
+                            secret_field(ui, tr, &mut form.password, Some(&mut form.reveal));
                             ui.end_row();
 
                             ui.label("");
@@ -3489,7 +3640,7 @@ impl MainApp {
                             ui.end_row();
 
                             ui.label(tr.field_password);
-                            ui.add(egui::TextEdit::singleline(&mut form.password).password(true));
+                            secret_field(ui, tr, &mut form.password, Some(&mut form.reveal));
                             ui.end_row();
 
                             ui.label(tr.field_domain);
@@ -3505,6 +3656,7 @@ impl MainApp {
                                 &mut form.password,
                                 &mut form.key_path,
                                 &mut form.key_passphrase,
+                                Some(&mut form.reveal),
                             );
                         }
                     }
@@ -3601,7 +3753,76 @@ impl MainApp {
                 self.save_vault();
             }
         } else if open {
+            self.handle_password_reveal(ctx, &mut form.reveal);
             self.edit_session_form = Some(form);
+        }
+    }
+
+    /// Vyhodnoti klik na oko v editacnim dialogu a pripadne zobrazi maly
+    /// dialog pro overeni hesla trezoru - viz `PasswordReveal`.
+    fn handle_password_reveal(&mut self, ctx: &egui::Context, reveal: &mut PasswordReveal) {
+        let tr = i18n::t(self.settings.lang);
+        if std::mem::take(&mut reveal.requested) && !reveal.revealed && !reveal.blocked() {
+            if self.is_guest {
+                // Hostovsky rezim - zadny trezor ani hlavni heslo, neni co overovat.
+                reveal.revealed = true;
+            } else if reveal.prompt.is_none() {
+                reveal.prompt = Some(RevealPrompt::default());
+            }
+        }
+
+        let Some(prompt) = reveal.prompt.as_mut() else { return };
+        let mut open = true;
+        let mut confirm = false;
+        let mut cancel = false;
+        centered_dialog(egui::Window::new(tr.reveal_prompt_title), ctx)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(tr.reveal_prompt_text);
+                ui.add_space(6.0);
+                let resp = ui.add(egui::TextEdit::singleline(&mut prompt.input).password(true).desired_width(240.0));
+                if !prompt.focus_requested {
+                    resp.request_focus();
+                    prompt.focus_requested = true;
+                }
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    confirm = true;
+                }
+                if let Some(err) = &prompt.error {
+                    ui.add_space(4.0);
+                    ui.colored_label(theme::DANGER, err);
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(tr.reveal_prompt_confirm).clicked() {
+                        confirm = true;
+                    }
+                    if ui.button(tr.btn_cancel).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if confirm {
+            if prompt.input == self.master_password {
+                reveal.revealed = true;
+                reveal.prompt = None;
+            } else {
+                reveal.failed_attempts += 1;
+                if reveal.failed_attempts >= MAX_REVEAL_ATTEMPTS {
+                    reveal.prompt = None;
+                    self.status_message = Some(tr.reveal_password_blocked.to_string());
+                } else {
+                    let left = MAX_REVEAL_ATTEMPTS - reveal.failed_attempts;
+                    prompt.error = Some(format!("{} {left}", tr.reveal_prompt_wrong));
+                    prompt.input.clear();
+                    prompt.focus_requested = false;
+                }
+            }
+        } else if cancel || !open {
+            reveal.prompt = None;
         }
     }
 
@@ -4085,18 +4306,24 @@ impl MainApp {
                 // `show_new_session_dialog`.
                 ui.horizontal(|ui| {
                     ui.label(tr.field_protocol);
-                    ui.selectable_value(&mut form.protocol, Protocol::Ssh, tr.protocol_ssh);
                     ui.selectable_value(&mut form.protocol, Protocol::Serial, tr.protocol_serial);
                     if ui.selectable_value(&mut form.protocol, Protocol::Ftp, tr.protocol_ftp).clicked()
-                        && (form.port.is_empty() || form.port == "22")
+                        && (form.port.is_empty() || form.port == "22" || form.port == "3389")
                     {
                         form.port = "21".to_string();
                     }
                     // Stejny "chytry" vychozi port jako u FTP vyse, jen 3389 (RDP) - viz `Protocol::Rdp`.
                     if ui.selectable_value(&mut form.protocol, Protocol::Rdp, tr.protocol_rdp).clicked()
-                        && (form.port.is_empty() || form.port == "22")
+                        && (form.port.is_empty() || form.port == "22" || form.port == "21")
                     {
                         form.port = "3389".to_string();
+                    }
+                    // Poradi podle abecedy (COM, FTP, RDP, SSH) - SSH zustava vychozi.
+                    // Navrat na SSH z FTP/RDP vrati i port na 22.
+                    if ui.selectable_value(&mut form.protocol, Protocol::Ssh, tr.protocol_ssh).clicked()
+                        && (form.port.is_empty() || form.port == "21" || form.port == "3389")
+                    {
+                        form.port = "22".to_string();
                     }
                 });
                 ui.add_space(4.0);
@@ -4205,6 +4432,7 @@ impl MainApp {
                                 &mut form.password,
                                 &mut form.key_path,
                                 &mut form.key_passphrase,
+                                None,
                             );
                         }
                     }
@@ -4887,11 +5115,17 @@ impl MainApp {
         // `termx-core`) - misto nevyznamoveho ":0" se v tomto pripade
         // zobrazi jen samotny port/cesta (`session.host`), bez ":cisla".
         let label = if session.protocol == Protocol::Serial {
-            format!("{}  [{}] {}", session.name, session.protocol, session.host)
+            // "COM" - stejna zkratka jako v prepinaci protokolu formularu.
+            format!("{}  [COM] {}", session.name, session.host)
         } else {
             format!("{}  [{}] {}:{}", session.name, session.protocol, session.host, session.port)
         };
         let tr = i18n::t(self.settings.lang);
+        // SFTP je SSH podsystem - jen u SSH serveru. "Otevřít v novém tabu"
+        // jen u protokolu s vestavenym terminalem (SSH/COM) - FTP a RDP maji
+        // vzdy jen jeden tab na server (viz `open_new_session_tab`).
+        let is_ssh = session.protocol == Protocol::Ssh;
+        let has_terminal = matches!(session.protocol, Protocol::Ssh | Protocol::Serial | Protocol::Local);
 
         let response = ui.selectable_label(false, label);
         if response.double_clicked() {
@@ -4902,11 +5136,11 @@ impl MainApp {
                 actions.push(TreeAction::Open(id));
                 ui.close_menu();
             }
-            if ui.button(tr.btn_open_new_tab).clicked() {
+            if has_terminal && ui.button(tr.btn_open_new_tab).clicked() {
                 actions.push(TreeAction::OpenNewTab(id));
                 ui.close_menu();
             }
-            if ui.button(tr.btn_open_sftp).clicked() {
+            if is_ssh && ui.button(tr.btn_open_sftp).clicked() {
                 actions.push(TreeAction::OpenSftp(id));
                 ui.close_menu();
             }

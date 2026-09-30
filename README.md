@@ -13,7 +13,7 @@
 
 # Term-IX
 
-Desktopový klient pro správu vzdálených spojení — SSH, sériová/COM linka, FTP/FTPS a vzdálená plocha Windows (RDP) — napsaný v Rustu, pro Windows i Linux.
+Desktopový klient pro správu vzdálených spojení — SSH, sériová/COM linka, FTP/FTPS, vzdálená plocha Windows (RDP) i místní terminál — napsaný v Rustu, pro Windows i Linux.
 
 Vestavěný terminálový emulátor (SSH i sériová linka), SFTP/FTP prohlížeč souborů, vzdálená plocha v samostatném okně, strom uložených serverů se šifrovaným trezorem, info proužek se stavem serveru a rozdělené zobrazení dvou spojení vedle sebe.
 
@@ -23,12 +23,13 @@ Vestavěný terminálový emulátor (SSH i sériová linka), SFTP/FTP prohlíže
 
 - **Vestavěný terminál** — VT100/ANSI emulace přímo v tabu aplikace, žádné externí okno konzole
 - **SSH i sériová linka (COM/RS-232)** — připojení k SSH serverům, nebo lokálně přes sériový port s plným nastavením (rychlost, datové/stop bity, parita, řízení toku)
+- **Místní terminál** — shell tohoto počítače (bash/zsh na Linuxu, cmd na Windows) v tabu vedle vzdálených spojení, včetně rozděleného zobrazení
 - **SFTP prohlížeč souborů** — v samostatném tabu vedle terminálu, nahrávání/stahování, vytváření/mazání/přejmenování
 - **FTP / FTPS** — samostatný prohlížeč souborů, volitelně šifrovaný (explicitní TLS)
 - **Vzdálená plocha Windows (RDP)** — v samostatném okně (vlastní maximalizace/celá obrazovka), přihlášení přes NLA, rozlišení se živě přizpůsobuje velikosti okna, Ctrl+Alt+Del z lišty, psaní česky i přes AltGr
-- **Kopírování / vkládání** — označení textu tažením myši, dvojklikem (slovo) nebo trojklikem (celý řádek), automatické zkopírování, vložení přes Ctrl+v nebo pravým tlačítkem myši
+- **Kopírování / vkládání** — označení textu tažením myši, dvojklikem (slovo) nebo trojklikem (celý řádek), automatické zkopírování, vložení přes Ctrl+v nebo pravým tlačítkem myši (s podporou bracketed paste, víceřádkový text se vloží správně i do nano/vim/bashe)
 - **Více tabů a rozdělené zobrazení** — libovolný počet otevřených tabů (i vícekrát stejný server), přehled aktuálně otevřených tabů v postranním panelu, dva taby vedle sebe s přepínáním fokusu klikem nebo Ctrl+Tab
-- **Šifrovaný trezor serverů** — AES-256-GCM + Argon2id, hlavní heslo se zadává přímo v okně appky
+- **Šifrovaný trezor serverů** — AES-256-GCM + Argon2id, hlavní heslo se zadává přímo v okně appky; uložené heslo serveru lze v editaci zobrazit po ověření heslem trezoru
 - **Strom serverů** — složky (i vnořené), hledání, přejmenování, přesouvání, export/import trezoru
 - **Rychlé spojení** — jednorázové ad-hoc připojení bez ukládání do trezoru
 - **Info proužek pod terminálem** — vytížení CPU, RAM, síť nahoru/dolů, místo na disku, uptime, přihlášení uživatelé a skutečný hostname serveru
@@ -87,6 +88,7 @@ Přidání dalšího protokolu (např. FTP): nový crate implementující `termx
 - **SSH:** [russh](https://github.com/Eugeny/russh)
 - **FTP/FTPS:** [suppaftp](https://github.com/veeso/suppaftp) + rustls
 - **RDP:** [IronRDP](https://github.com/Devolutions/IronRDP) + rustls
+- **Místní terminál:** [portable-pty](https://github.com/wezterm/wezterm/tree/main/pty) (PTY na Linuxu, ConPTY na Windows)
 
 ## ⚠️ Prohlášení
 

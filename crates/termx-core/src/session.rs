@@ -13,6 +13,9 @@ pub enum Protocol {
     Sftp,
     Telnet,
     Rdp,
+    /// Mistni (lokalni) terminal - shell na tomto pocitaci, zadna sit
+    /// (viz `termx-local`). `host` = program shellu (prazdne = vychozi).
+    Local,
 }
 
 impl Protocol {
@@ -25,6 +28,7 @@ impl Protocol {
             Protocol::Sftp => "sftp",
             Protocol::Telnet => "telnet",
             Protocol::Rdp => "rdp",
+            Protocol::Local => "local",
         }
     }
 }

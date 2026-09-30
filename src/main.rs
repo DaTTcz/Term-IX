@@ -72,6 +72,7 @@ fn main() -> anyhow::Result<()> {
     registry.register(Arc::new(termx_serial::SerialModule::new()));
     registry.register(Arc::new(termx_ftp::FtpModule::new()));
     registry.register(Arc::new(termx_rdp::RdpModule::new()));
+    registry.register(Arc::new(termx_local::LocalModule::new()));
 
     // GUI (termx-gui, postavene na egui/eframe) si bezi ve vlastni
     // blokujici smycce na aktualnim vlakne - na rozdil od puvodniho TUI

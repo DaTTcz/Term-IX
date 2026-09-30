@@ -30,6 +30,8 @@ termx-serial = { workspace = true }
 # (deferred viewport), ne primo v tabu - viz `rdp_viewer.rs`.
 termx-ftp = { workspace = true }
 termx-rdp = { workspace = true }
+# Mistni terminal (shell v PTY na tomto pocitaci) - viz `terminal.rs`.
+termx-local = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

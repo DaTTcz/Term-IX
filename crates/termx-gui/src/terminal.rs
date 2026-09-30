@@ -137,6 +137,7 @@ use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
 
 use termx_core::{AuthMethod, Protocol, Session};
+use termx_local::{spawn_local_session, LocalEvent, LocalHandle, LocalInput};
 use termx_serial::{spawn_serial_session, SerialEvent, SerialHandle, SerialInput};
 use termx_ssh::{spawn_ssh_session, SshEvent, SshHandle, SshInput, SystemStats};
 
@@ -480,6 +481,8 @@ fn char_class(c: char) -> CharClass {
 enum ConnHandle {
     Ssh(SshHandle),
     Serial(SerialHandle),
+    /// Mistni terminal (shell v PTY na tomto pocitaci, `termx-local`).
+    Local(LocalHandle),
 }
 
 /// Sjednocena udalost pro `pump` bez ohledu na to, jestli `self.handle`
@@ -513,6 +516,15 @@ impl PumpEvent {
         }
     }
 
+    fn from_local(event: LocalEvent) -> Self {
+        match event {
+            LocalEvent::Data(bytes) => PumpEvent::Data(bytes),
+            LocalEvent::Connected => PumpEvent::Connected,
+            LocalEvent::Error(msg) => PumpEvent::Error(msg),
+            LocalEvent::Closed => PumpEvent::Closed,
+        }
+    }
+
     fn from_serial(event: SerialEvent) -> Self {
         match event {
             SerialEvent::Data(bytes) => PumpEvent::Data(bytes),
@@ -541,6 +553,7 @@ impl TerminalSession {
         // otevreni portu.
         let handle = match session.protocol {
             Protocol::Serial => ConnHandle::Serial(spawn_serial_session(session.clone())),
+            Protocol::Local => ConnHandle::Local(spawn_local_session(session.clone(), DEFAULT_COLS as u16, DEFAULT_ROWS as u16)),
             _ => ConnHandle::Ssh(spawn_ssh_session(session.clone(), DEFAULT_COLS as u16, DEFAULT_ROWS as u16)),
         };
 
@@ -607,7 +620,7 @@ impl TerminalSession {
             ConnHandle::Ssh(handle) => {
                 let _ = handle.input_tx.send(SshInput::Credentials { username, password });
             }
-            ConnHandle::Serial(_) => {}
+            ConnHandle::Serial(_) | ConnHandle::Local(_) => {}
         }
     }
 
@@ -626,6 +639,7 @@ impl TerminalSession {
         self.parser = Processor::new();
         self.handle = match self.session.protocol {
             Protocol::Serial => ConnHandle::Serial(spawn_serial_session(self.session.clone())),
+            Protocol::Local => ConnHandle::Local(spawn_local_session(self.session.clone(), self.cols as u16, self.rows as u16)),
             _ => ConnHandle::Ssh(spawn_ssh_session(self.session.clone(), self.cols as u16, self.rows as u16)),
         };
         self.connected = false;
@@ -649,7 +663,10 @@ impl TerminalSession {
     /// (viz `render`) - dokud prvni pripojovaci pokus jeste bezi
     /// (`ConnState::Connecting`), zadny dalsi netreba spoustet.
     fn maybe_auto_reconnect(&mut self, enabled: bool) {
-        if !enabled {
+        // Mistni terminal skoncil `exit`em (nebo zavrenim shellu) - to je
+        // zamer uzivatele, ne vypadek spojeni; znovu ho spusti jen rucne
+        // tlacitkem.
+        if !enabled || self.session.protocol == Protocol::Local {
             return;
         }
         let ready = match self.last_reconnect_attempt {
@@ -677,8 +694,16 @@ impl TerminalSession {
         // potrebovala vedet - viz `termx_serial::SerialInput`, ktere
         // zadnou `Resize` variantu vubec nema), takze se posila jen u
         // `ConnHandle::Ssh`.
-        if let ConnHandle::Ssh(handle) = &self.handle {
-            let _ = handle.input_tx.send(SshInput::Resize { cols: cols as u32, rows: rows as u32 });
+        match &self.handle {
+            ConnHandle::Ssh(handle) => {
+                let _ = handle.input_tx.send(SshInput::Resize { cols: cols as u32, rows: rows as u32 });
+            }
+            // Mistni terminal - PTY musi o nove velikosti vedet stejne
+            // jako SSH (SIGWINCH pro `vim`/`htop`/`mc`).
+            ConnHandle::Local(handle) => {
+                let _ = handle.input_tx.send(LocalInput::Resize { cols: cols as u16, rows: rows as u16 });
+            }
+            ConnHandle::Serial(_) => {}
         }
     }
 
@@ -724,6 +749,11 @@ impl TerminalSession {
                 },
                 ConnHandle::Serial(handle) => match handle.output_rx.try_recv() {
                     Ok(e) => Some(PumpEvent::from_serial(e)),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+                },
+                ConnHandle::Local(handle) => match handle.output_rx.try_recv() {
+                    Ok(e) => Some(PumpEvent::from_local(e)),
                     Err(std::sync::mpsc::TryRecvError::Empty) => None,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
                 },
@@ -825,7 +855,8 @@ impl TerminalSession {
     /// Vyzvedne `Event::Paste` vyzadany pravym klikem na TENTO panel (viz
     /// `render_grid` a `paste_target_id`).
     fn take_requested_paste(&mut self, ui: &egui::Ui) {
-        if requested_paste_target(ui.ctx()) != Some(self.focus_id()) {
+        // Behem prihlasovaciho promptu vklada `handle_credentials_keyboard`.
+        if self.state() == ConnState::AwaitingCredentials || requested_paste_target(ui.ctx()) != Some(self.focus_id()) {
             return;
         }
         let text = ui.input(|i| {
@@ -862,6 +893,9 @@ impl TerminalSession {
             }
             ConnHandle::Serial(handle) => {
                 let _ = handle.input_tx.send(SerialInput::Data(bytes));
+            }
+            ConnHandle::Local(handle) => {
+                let _ = handle.input_tx.send(LocalInput::Data(bytes));
             }
         }
     }
