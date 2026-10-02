@@ -1313,6 +1313,24 @@ fn grid_field_term_type_dropdown(ui: &mut egui::Ui, id_salt: &str, value: &mut S
     resp
 }
 
+/// Typy terminalu, ktere pouziva jen Avaya Communication Manager SAT (viz
+/// `term_type_suggestions`) - `vt220`/`vt100` zamerne ne, ty jsou obecne.
+const AVAYA_ONLY_TERM_TYPES: &[&str] = &["513", "715", "4410", "4425", "w2ktt", "ntt", "sunt"];
+
+/// Upozorneni pod "Typ terminálu" (zpetna vazba "5022 a je to" - SSH server
+/// s Avaya typem terminalu, ale na portu 22, se otevrel jen jako cerny
+/// linuxovy shell misto SAT): Avaya CM SAT posloucha na SSH portu 5022,
+/// port 22 vede do Linuxu. Jen napoveda, nic se neblokuje ani nemeni.
+/// Kresli se jako dalsi radek 2-sloupcoveho Gridu.
+fn avaya_port_hint(ui: &mut egui::Ui, tr: &i18n::Strings, protocol: Protocol, term_type: &str, port: &str) {
+    let avaya = AVAYA_ONLY_TERM_TYPES.iter().any(|t| t.eq_ignore_ascii_case(term_type.trim()));
+    if protocol == Protocol::Ssh && avaya && port.trim() == "22" {
+        ui.label("");
+        ui.colored_label(egui::Color32::from_rgb(0xe0, 0xb0, 0x5c), tr.avaya_port_hint);
+        ui.end_row();
+    }
+}
+
 /// Cela aplikace PO uspesnem odemceni/vytvoreni trezoru (nebo po
 /// vstupu do hostovskeho rezimu, viz `is_guest`) - totozne s tim, jak
 /// vypadal puvodni `TermxApp` pred pridanim zamcene obrazovky.
@@ -2645,6 +2663,7 @@ impl MainApp {
                                     &mut self.home_connect_form.term_type,
                                     &term_type_suggestions,
                                 );
+                                avaya_port_hint(ui, tr, self.home_connect_form.protocol, &self.home_connect_form.term_type, &self.home_connect_form.port);
 
                                 match self.home_connect_form.protocol {
                                     Protocol::Serial => {}
@@ -3387,6 +3406,7 @@ impl MainApp {
                         &mut form.term_type,
                         &term_type_suggestions,
                     );
+                    avaya_port_hint(ui, tr, form.protocol, &form.term_type, &form.port);
 
                     // Prihlasovaci udaje (heslo/klic) davaji smysl jen pro
                     // SSH - seriova linka zadnou autentizaci nema (viz
@@ -3618,6 +3638,7 @@ impl MainApp {
                         &mut form.term_type,
                         &term_type_suggestions,
                     );
+                    avaya_port_hint(ui, tr, form.protocol, &form.term_type, &form.port);
 
                     match form.protocol {
                         Protocol::Serial => {}
@@ -4391,6 +4412,7 @@ impl MainApp {
                         &mut form.term_type,
                         &term_type_suggestions,
                     );
+                    avaya_port_hint(ui, tr, form.protocol, &form.term_type, &form.port);
 
                     match form.protocol {
                         Protocol::Serial => {}

@@ -79,6 +79,8 @@ pub struct Strings {
     /// Label radku pro volitelny terminal type (`Session::term_type`) -
     /// viz `show_new_session_dialog`/`show_edit_session_dialog`.
     pub field_term_type: &'static str,
+    /// Viz `app.rs::avaya_port_hint`.
+    pub avaya_port_hint: &'static str,
     /// Label radku s prepinacem protokolu (SSH/seriovy port) ve
     /// formularich Novy/Upravit server - viz `Protocol` a pozadavek
     /// "Připojení přes COM/sériový port jako další 'plugin'".
@@ -433,6 +435,7 @@ pub const CS: Strings = Strings {
     btn_choose_key_file: "Vybrat soubor...",
     field_key_passphrase: "Pasfráze (volitelné):",
     field_term_type: "Typ terminálu:",
+    avaya_port_hint: "⚠ Avaya SAT běží obvykle na portu 5022 (port 22 vede do Linuxu).",
     field_protocol: "Protokol:",
     protocol_ssh: "SSH",
     protocol_serial: "COM",
@@ -698,6 +701,7 @@ pub const EN: Strings = Strings {
     btn_choose_key_file: "Choose file...",
     field_key_passphrase: "Passphrase (optional):",
     field_term_type: "Terminal type:",
+    avaya_port_hint: "⚠ Avaya SAT usually runs on port 5022 (port 22 leads to Linux).",
     field_protocol: "Protocol:",
     protocol_ssh: "SSH",
     protocol_serial: "COM",

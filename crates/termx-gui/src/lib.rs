@@ -150,7 +150,12 @@ pub fn run_app(vault_path: PathBuf, registry: ModuleRegistry, skip_update_check:
             // polohu okna/nastaveni (jazyk, tema, ...), nic
             // bezpecnostne/datove kriticke (trezor je samostatny soubor,
             // viz `vault_path`) - prijatelna cena za funkcni ikonu.
-            .with_app_id("term-ix"),
+            .with_app_id("term-ix")
+            // Verze v titulku okna (zpetna vazba "vedle názvu bychom mohli
+            // ukazovat číslo verze"). Titulek se nastavuje tady, NE zmenou
+            // `app_name` v `eframe::run_native` nize - ten slouzi i jako
+            // identifikator (a nemel by se menit s kazdou verzi).
+            .with_title(format!("Term-IX v{}", env!("CARGO_PKG_VERSION"))),
         // Pri prvnim spusteni (kdyz jeste neni co obnovit) se okno
         // vycentruje na obrazovce. `persist_window` pak pri kazdem
         // dalsim spusteni (diky cargo feature "persistence" u eframe)
