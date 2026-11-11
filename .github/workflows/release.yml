@@ -63,6 +63,32 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # Verze appky se bere z TAGU (v0.8.2 -> 0.8.2), neni potreba ji pred
+      # vydanim rucne menit v Cargo.toml. Prepise se `[workspace.package]
+      # version` (jedina radka `version = "..."` na zacatku radku v
+      # Cargo.toml - vsechny crates maji `version.workspace = true`) a
+      # `cargo update --workspace` srovna Cargo.lock (meni JEN nase crates,
+      # ne zavislosti), aby nasledny `--locked` build prosel.
+      # `env!("CARGO_PKG_VERSION")` (titulek okna, About, self-update) tak
+      # vzdy odpovida tagu. Zamerne AZ PO "Cache cargo" - rust-cache si
+      # klic spocita z puvodniho Cargo.toml/Cargo.lock, takze zmena verze
+      # cache nerozbije. Pri rucnim spusteni (workflow_dispatch, bez tagu)
+      # se krok preskoci a pouzije se verze z Cargo.toml.
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' neni ve tvaru vX.Y.Z"
+            exit 1
+          fi
+          sed -i -E "0,/^version = \".*\"/s//version = \"${VERSION}\"/" Cargo.toml
+          grep -n '^version = ' Cargo.toml
+          cargo update --workspace
+          echo "Verze nastavena na ${VERSION}"
+
       # Stejna sada jako v `ci.yml` (a v eR-Commanderu) - viz komentar
       # tam. `libudev-dev` navic pridano kvuli `termx-serial`
       # (crate `serialport` na Linuxu pro vypis dostupnych
