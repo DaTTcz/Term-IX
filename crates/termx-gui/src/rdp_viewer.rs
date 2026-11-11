@@ -34,7 +34,7 @@
 //! "nejdřív funkční spojení").
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -70,9 +70,35 @@ pub struct RdpBrowser {
     state: RdpState,
     error: Option<String>,
     desktop_size: [u16; 2],
-    /// ID viewportu okna plochy - stejne po celou dobu zivota relace.
-    viewport_id: egui::ViewportId,
+    /// ID relace - z nej (+ `WindowShared::generation`) se sklada ID
+    /// viewportu okna plochy, viz [`rdp_viewport_id`].
+    session_id: uuid::Uuid,
     window: Arc<WindowShared>,
+    /// Geometrie puvodniho okna pri jeho znovuvytvoreni (Wayland "prepnout
+    /// na okno plochy", viz `bring_window_to_front`) - pocatecni velikost a
+    /// stav noveho viewportu.
+    reopen_geometry: Option<WindowGeometry>,
+}
+
+/// Velikost/stav okna plochy prevzaty ze stareho viewportu do noveho.
+#[derive(Clone, Copy)]
+struct WindowGeometry {
+    inner_size: Option<egui::Vec2>,
+    maximized: bool,
+    fullscreen: bool,
+}
+
+/// ID viewportu okna plochy. `generation` se zvysi pri kazdem
+/// znovuvytvoreni okna (viz `RdpBrowser::bring_window_to_front`) - egui
+/// pak stary viewport zavre a otevre novy OS okno.
+fn rdp_viewport_id(session_id: uuid::Uuid, generation: u64) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("rdp", session_id, generation))
+}
+
+/// Bezi appka nativne na Waylandu? (winit vybira Wayland, kdyz je
+/// nastavena `WAYLAND_DISPLAY`.)
+fn is_wayland() -> bool {
+    cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
 }
 
 /// Stav sdileny s uzaverem deferred viewportu (viz header komentar).
@@ -82,6 +108,9 @@ struct WindowShared {
     /// Okno je otevrene - krizek OS okna ho zavre BEZ ukonceni relace,
     /// stavova karta v tabu pak nabidne "Znovu otevřít okno plochy".
     open: AtomicBool,
+    /// Generace OS okna plochy - viz [`rdp_viewport_id`]. Sdilena s
+    /// RDP vlaknem (waker), aby budil vzdy aktualni viewport.
+    generation: Arc<AtomicU64>,
     ui: Mutex<WindowUi>,
 }
 
@@ -119,18 +148,23 @@ impl RdpBrowser {
             _ => (String::new(), String::new()),
         };
         let domain = session.rdp_domain.clone().filter(|d| !d.trim().is_empty());
-        let viewport_id = egui::ViewportId::from_hash_of(("rdp", session.id));
+        let session_id = session.id;
+        let generation = Arc::new(AtomicU64::new(0));
 
         let ppp = ctx.pixels_per_point();
         let initial_width = (DEFAULT_WINDOW_SIZE.x * ppp).round() as u16;
         let initial_height = ((DEFAULT_WINDOW_SIZE.y - TOOLBAR_HEIGHT_ESTIMATE) * ppp).round() as u16;
 
         let waker_ctx = ctx.clone();
-        let waker: termx_rdp::RdpWaker = Arc::new(move |wake| match wake {
-            RdpWake::Frame => waker_ctx.request_repaint_of(viewport_id),
-            RdpWake::Event => {
-                waker_ctx.request_repaint_of(egui::ViewportId::ROOT);
-                waker_ctx.request_repaint_of(viewport_id);
+        let waker_generation = generation.clone();
+        let waker: termx_rdp::RdpWaker = Arc::new(move |wake| {
+            let viewport_id = rdp_viewport_id(session_id, waker_generation.load(Ordering::Relaxed));
+            match wake {
+                RdpWake::Frame => waker_ctx.request_repaint_of(viewport_id),
+                RdpWake::Event => {
+                    waker_ctx.request_repaint_of(egui::ViewportId::ROOT);
+                    waker_ctx.request_repaint_of(viewport_id);
+                }
             }
         });
 
@@ -151,6 +185,7 @@ impl RdpBrowser {
             command_tx: Mutex::new(handle.command_tx.clone()),
             frame: handle.frame,
             open: AtomicBool::new(true),
+            generation,
             ui: Mutex::new(WindowUi::default()),
         });
 
@@ -160,13 +195,57 @@ impl RdpBrowser {
             state: RdpState::Connecting,
             error: None,
             desktop_size: [initial_width, initial_height],
-            viewport_id,
+            session_id,
             window,
+            reopen_geometry: None,
         }
     }
 
     pub fn state(&self) -> RdpState {
         self.state
+    }
+
+    fn viewport_id(&self) -> egui::ViewportId {
+        rdp_viewport_id(self.session_id, self.window.generation.load(Ordering::Relaxed))
+    }
+
+    /// Tlacitko "Přepnout na okno plochy".
+    ///
+    /// X11/Windows: `Minimized(false)` + `Focus` staci.
+    ///
+    /// Wayland (KWin, Plasma 6): obojí je tam bez efektu - Wayland klientovi
+    /// nedovoli okno obnovit z minimalizace a `Focus` (winit
+    /// `focus_window`) kompozitor kvuli ochrane proti kradeni fokusu
+    /// ignoruje (nanejvys rozblika ikonu v liste). Spolehlive funguje jen
+    /// NOVE otevrene okno aplikace, ktera je prave aktivni (uzivatel
+    /// zrovna kliknul v hlavnim okne) - proto se okno plochy zavre a
+    /// otevre znovu (nova generace viewportu) se stejnou velikosti a
+    /// stavem. Relace ani obraz se tim nijak nepreruseji (textura i
+    /// `SharedFrame` zustavaji).
+    fn bring_window_to_front(&mut self, ctx: &egui::Context) {
+        let old_id = self.viewport_id();
+        if !is_wayland() {
+            ctx.send_viewport_cmd_to(old_id, egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd_to(old_id, egui::ViewportCommand::Focus);
+            return;
+        }
+        let geometry = ctx.input(|i| {
+            i.raw.viewports.get(&old_id).map(|v| WindowGeometry {
+                inner_size: v.inner_rect.map(|r| r.size()),
+                maximized: v.maximized.unwrap_or(false),
+                fullscreen: v.fullscreen.unwrap_or(false),
+            })
+        });
+        self.reopen_geometry = geometry;
+        self.window.send(RdpCommand::ReleaseAll);
+        {
+            let mut ui_state = self.window.ui.lock().unwrap();
+            ui_state.focused = false;
+            ui_state.sent_modifiers = Modifiers::default();
+            ui_state.scancode_keys_down.clear();
+        }
+        self.window.generation.fetch_add(1, Ordering::Relaxed);
+        ctx.request_repaint();
     }
 
     /// Zpracuje cekajici udalosti z bezici relace.
@@ -220,8 +299,7 @@ impl RdpBrowser {
             if self.state != RdpState::Disconnected {
                 if window_open {
                     if ui.button(tr.rdp_focus_window).clicked() {
-                        ctx.send_viewport_cmd_to(self.viewport_id, egui::ViewportCommand::Minimized(false));
-                        ctx.send_viewport_cmd_to(self.viewport_id, egui::ViewportCommand::Focus);
+                        self.bring_window_to_front(ctx);
                     }
                 } else if ui.button(tr.rdp_reopen_window).clicked() {
                     self.window.open.store(true, Ordering::Relaxed);
@@ -243,17 +321,26 @@ impl RdpBrowser {
         let label_cad = tr.rdp_toolbar_ctrl_alt_del;
         let label_disconnect = tr.rdp_toolbar_disconnect;
 
-        let builder = egui::ViewportBuilder::default()
+        let geometry = self.reopen_geometry;
+        let mut builder = egui::ViewportBuilder::default()
             .with_title(format!("{session_name} - RDP"))
-            .with_inner_size(DEFAULT_WINDOW_SIZE)
+            .with_inner_size(geometry.and_then(|g| g.inner_size).unwrap_or(DEFAULT_WINDOW_SIZE))
             .with_min_inner_size(egui::vec2(320.0, 240.0))
             // Stejne app_id + ikona jako hlavni okno (viz `lib.rs::run_app`/
             // `linux_desktop`) - jinak by okno plochy na Waylandu melo
             // genericke "W" misto ikony Term-IX.
             .with_app_id("term-ix")
             .with_icon(crate::app_icon());
+        if let Some(g) = geometry {
+            builder = builder.with_maximized(g.maximized).with_fullscreen(g.fullscreen);
+        }
 
-        ctx.show_viewport_deferred(self.viewport_id, builder, move |ctx, _class| {
+        // `reopen_geometry` se ZAMERNE nemaze - egui porovnava builder s
+        // predchozim snimkem a kazdou zmenu (napr. zpet na
+        // DEFAULT_WINDOW_SIZE) by poslal oknu jako prikaz. Builder tak musi
+        // zustat stejny po celou dobu zivota jednoho viewportu.
+        let viewport_id = self.viewport_id();
+        ctx.show_viewport_deferred(viewport_id, builder, move |ctx, _class| {
             window_ui(ctx, &shared, label_fullscreen, label_cad, label_disconnect);
         });
     }

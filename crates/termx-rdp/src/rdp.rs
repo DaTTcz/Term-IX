@@ -370,7 +370,13 @@ fn connect(params: &RdpConnectParams) -> anyhow::Result<(ConnectionResult, Upgra
         server_public_key,
         None,
     )
-    .map_err(|e| anyhow::anyhow!("dokončení RDP přihlášení selhalo: {e:?}"))?;
+    .map_err(|e| {
+        let detail = format!("{e:?}");
+        match credssp_status_hint(&detail) {
+            Some(hint) => anyhow::anyhow!("{hint}\n\n(technicky: dokončení RDP přihlášení selhalo: {detail})"),
+            None => anyhow::anyhow!("dokončení RDP přihlášení selhalo: {detail}"),
+        }
+    })?;
 
     // Vybaleni `RetryingStream` zpet na cistou `TcpStream`
     // (`rustls::StreamOwned` ma verejna pole `conn`/`sock`).
@@ -380,6 +386,31 @@ fn connect(params: &RdpConnectParams) -> anyhow::Result<(ConnectionResult, Upgra
     let final_framed = ironrdp_blocking::Framed::new_with_leftover(plain_stream, leftover);
 
     Ok((connection_result, final_framed, timeout_handle))
+}
+
+/// Srozumitelna hlaska pro nejcastejsi NTSTATUS kody, ktere Windows vraci
+/// pri odmitnuti prihlaseni behem CredSSP/NLA (zpetna vazba "z té hlášky
+/// jsem hned nepochopil proč přihlášení selhalo" - puvodne se zobrazil jen
+/// Debug vypis `... nstatus: Some(NStatusCode(0xc000006d)) ...`). Hleda se
+/// primo v textu Debug vypisu chyby, aby to nezaviselo na vnitrnich typech
+/// `sspi`. Neznamy kod = `None` (zobrazi se jen technicky vypis).
+fn credssp_status_hint(debug: &str) -> Option<&'static str> {
+    let lower = debug.to_ascii_lowercase();
+    const HINTS: &[(&str, &str)] = &[
+        ("0xc000006d", "Přihlášení odmítnuto: špatné uživatelské jméno nebo heslo (případně doména). U lokálního účtu nech doménu prázdnou nebo zkus jméno ve tvaru .\\uzivatel."),
+        ("0xc000006a", "Přihlášení odmítnuto: špatné heslo."),
+        ("0xc0000064", "Přihlášení odmítnuto: takový uživatel neexistuje (zkontroluj jméno a doménu)."),
+        ("0xc0000234", "Účet je zamčený (příliš mnoho chybných pokusů o přihlášení)."),
+        ("0xc0000072", "Účet je zakázaný."),
+        ("0xc0000193", "Platnost účtu vypršela."),
+        ("0xc0000071", "Platnost hesla vypršela - je potřeba ho změnit (např. přímo na počítači)."),
+        ("0xc0000224", "Heslo je nutné změnit při příštím přihlášení - změň ho nejdřív přímo na počítači."),
+        ("0xc000006e", "Účet má omezení přihlášení (např. prázdné heslo není pro vzdálené přihlášení povolené)."),
+        ("0xc000006f", "Přihlášení v tuto dobu není pro tento účet povolené."),
+        ("0xc0000070", "Přihlášení z tohoto počítače není pro tento účet povolené."),
+        ("0xc000015b", "Uživatel nemá oprávnění k přihlášení přes Vzdálenou plochu (skupina Remote Desktop Users)."),
+    ];
+    HINTS.iter().find(|(code, _)| lower.contains(code)).map(|(_, hint)| *hint)
 }
 
 /// Konfigurace RDP klienta - hodnoty z oficialniho `screenshot.rs`
