@@ -9,3 +9,7 @@
 /vendor.tgz
 /termix-vendor.tgz
 /.cargo/
+
+# Soubory, ktere Claude posila do chatu - desktop aplikace je uklada do
+# pripojene slozky (tj. sem do repa) do "Claude outputs/".
+Claude outputs/
