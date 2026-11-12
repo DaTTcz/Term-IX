@@ -218,20 +218,33 @@ impl SftpBrowser {
             SftpState::AwaitingCredentials => {
                 ui.heading(tr.sftp_login_heading);
                 ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label(tr.field_username);
-                    ui.text_edit_singleline(&mut self.cred_username);
-                });
-                ui.horizontal(|ui| {
-                    ui.label(tr.field_password);
-                    ui.add(egui::TextEdit::singleline(&mut self.cred_password).password(true));
-                });
+                let user_resp = ui
+                    .horizontal(|ui| {
+                        ui.label(tr.field_username);
+                        ui.text_edit_singleline(&mut self.cred_username)
+                    })
+                    .inner;
+                let pass_resp = ui
+                    .horizontal(|ui| {
+                        ui.label(tr.field_password);
+                        ui.add(egui::TextEdit::singleline(&mut self.cred_password).password(true))
+                    })
+                    .inner;
+                // Fokus pri zobrazeni prihlaseni: jmeno je casto uz
+                // predvyplnene z ulozeneho serveru - pak rovnou na heslo.
+                if self.cred_username.trim().is_empty() {
+                    crate::form_focus::autofocus_on_open(&user_resp);
+                } else {
+                    crate::form_focus::autofocus_on_open(&pass_resp);
+                }
+                // Enter v poli hesla = Připojit.
+                let enter_connect = crate::form_focus::enter_pressed(&pass_resp);
                 ui.add_space(4.0);
                 if let Some(status) = &status_text {
                     ui.colored_label(egui::Color32::from_rgb(0xe0, 0x6c, 0x6c), status);
                     ui.add_space(4.0);
                 }
-                if ui.button(tr.btn_connect).clicked() {
+                if ui.button(tr.btn_connect).clicked() || enter_connect {
                     let _ = self.handle.cmd_tx.send(SftpCommand::Credentials {
                         username: self.cred_username.clone(),
                         password: self.cred_password.clone(),
@@ -425,7 +438,8 @@ impl SftpBrowser {
         let Some(mut name) = self.mkdir_input.take() else { return };
         let mut open = true;
         let mut submit = false;
-        let mut cancel = false;
+        // Jednopolovy dialog - Esc = zrusit, Enter = vytvorit.
+        let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
 
         egui::Window::new(tr.dialog_sftp_mkdir_title)
             .collapsible(false)
@@ -435,7 +449,11 @@ impl SftpBrowser {
             .open(&mut open)
             .show(ui.ctx(), |ui| {
                 ui.label(tr.field_name);
-                ui.text_edit_singleline(&mut name);
+                let name_resp = ui.text_edit_singleline(&mut name);
+                crate::form_focus::autofocus_on_open(&name_resp);
+                if crate::form_focus::enter_pressed(&name_resp) {
+                    submit = true;
+                }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui.button(tr.btn_sftp_create).clicked() {
@@ -468,7 +486,8 @@ impl SftpBrowser {
         let Some((old_name, mut new_name)) = self.rename_input.take() else { return };
         let mut open = true;
         let mut submit = false;
-        let mut cancel = false;
+        // Jednopolovy dialog - Esc = zrusit, Enter = ulozit.
+        let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
 
         egui::Window::new(tr.dialog_rename_title)
             .collapsible(false)
@@ -478,7 +497,11 @@ impl SftpBrowser {
             .open(&mut open)
             .show(ui.ctx(), |ui| {
                 ui.label(tr.field_name);
-                ui.text_edit_singleline(&mut new_name);
+                let name_resp = ui.text_edit_singleline(&mut new_name);
+                crate::form_focus::autofocus_select_all(&name_resp, &new_name);
+                if crate::form_focus::enter_pressed(&name_resp) {
+                    submit = true;
+                }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui.button(tr.btn_save).clicked() {

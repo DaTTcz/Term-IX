@@ -3910,7 +3910,9 @@ impl MainApp {
         let Some(mut dialog) = self.rename_dialog.take() else { return };
         let mut open = true;
         let mut confirmed = false;
-        let mut cancel = false;
+        // Jednopolovy dialog - Esc = zrusit, Enter = ulozit (stejne jako
+        // "Nová složka", viz `show_new_folder_dialog`).
+        let mut cancel = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let tr = i18n::t(self.settings.lang);
 
         centered_dialog(egui::Window::new(tr.dialog_rename_title), ctx)
@@ -3918,7 +3920,12 @@ impl MainApp {
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.text_edit_singleline(&mut dialog.value);
+                let value_resp = ui.text_edit_singleline(&mut dialog.value);
+                // Fokus + oznaceny puvodni nazev hned pri otevreni.
+                crate::form_focus::autofocus_select_all(&value_resp, &dialog.value);
+                if crate::form_focus::enter_pressed(&value_resp) {
+                    confirmed = true;
+                }
                 ui.horizontal(|ui| {
                     if ui.button(tr.btn_save).clicked() {
                         confirmed = true;
@@ -3957,7 +3964,9 @@ impl MainApp {
         let Some(mut dialog) = self.move_dialog.take() else { return };
         let mut open = true;
         let mut confirmed = false;
-        let mut cancel = false;
+        // Jednopolovy dialog - Esc = zrusit, Enter = presunout (stejne
+        // jako "Nová složka", viz `show_new_folder_dialog`).
+        let mut cancel = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let tr = i18n::t(self.settings.lang);
         let known_folders = self.known_folder_paths();
 
@@ -3967,7 +3976,11 @@ impl MainApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label(tr.move_folder_path_hint);
-                ui.text_edit_singleline(&mut dialog.value);
+                let value_resp = ui.text_edit_singleline(&mut dialog.value);
+                crate::form_focus::autofocus_on_open(&value_resp);
+                if crate::form_focus::enter_pressed(&value_resp) {
+                    confirmed = true;
+                }
                 let matches = field_matches(&known_folders, &dialog.value);
                 if !matches.is_empty() {
                     render_suggestion_chips(ui, &mut dialog.value, &matches);
@@ -4555,8 +4568,10 @@ impl MainApp {
                 ui.label(tr.export_what_label);
                 ui.horizontal_wrapped(|ui| {
                     ui.label("🔍");
-                    ui.add(egui::TextEdit::singleline(&mut dialog.filter).desired_width(160.0))
+                    let filter_resp = ui
+                        .add(egui::TextEdit::singleline(&mut dialog.filter).desired_width(160.0))
                         .on_hover_text(tr.export_search_hover);
+                    crate::form_focus::autofocus_on_open(&filter_resp);
                     if ui.button(tr.btn_select_all).clicked() {
                         select_all = true;
                     }
@@ -4727,7 +4742,8 @@ impl MainApp {
             .show(ctx, |ui| {
                 ui.label(tr.import_source_file_label);
                 ui.horizontal(|ui| {
-                    ui.text_edit_singleline(&mut dialog.path);
+                    let path_resp = ui.text_edit_singleline(&mut dialog.path);
+                    crate::form_focus::autofocus_on_open(&path_resp);
                     if ui.button(tr.btn_browse).clicked() {
                         browse = true;
                     }
