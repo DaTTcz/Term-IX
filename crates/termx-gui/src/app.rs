@@ -37,7 +37,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use termx_core::{AuthMethod, ModuleRegistry, Protocol, SerialDataBits, SerialFlowControl, SerialParity, SerialStopBits, Session};
+use termx_core::{AuthMethod, BackspaceMode, ModuleRegistry, Protocol, SerialDataBits, SerialFlowControl, SerialParity, SerialStopBits, Session};
 use termx_update::LatestRelease;
 use termx_vault::{Vault, VaultData};
 use uuid::Uuid;
@@ -553,6 +553,8 @@ struct NewSessionForm {
     key_passphrase: String,
     /// Viz `Session::term_type` - prazdne = vychozi (`xterm-256color`).
     term_type: String,
+    /// Viz `Session::backspace`.
+    backspace: BackspaceMode,
     /// Ktery protokol se ma pro tento server pouzit (viz `Protocol`) -
     /// zpetna vazba "Připojení přes COM/sériový port jako další
     /// 'plugin'". `Ssh`/`Serial`/`Ftp` jsou v UI vyberatelne (viz
@@ -602,6 +604,7 @@ impl Default for NewSessionForm {
             key_path: String::new(),
             key_passphrase: String::new(),
             term_type: String::new(),
+            backspace: BackspaceMode::Auto,
             protocol: Protocol::Ssh,
             serial_baud_rate: String::new(),
             serial_data_bits: SerialDataBits::Eight,
@@ -635,6 +638,8 @@ struct EditSessionForm {
     key_passphrase: String,
     /// Viz `Session::term_type` - prazdne = vychozi (`xterm-256color`).
     term_type: String,
+    /// Viz `Session::backspace`.
+    backspace: BackspaceMode,
     /// Viz `NewSessionForm::protocol`.
     protocol: Protocol,
     /// Viz `NewSessionForm::serial_baud_rate`.
@@ -686,6 +691,7 @@ impl EditSessionForm {
             key_path,
             key_passphrase,
             term_type: session.term_type.clone().unwrap_or_default(),
+            backspace: session.backspace,
             protocol: session.protocol,
             serial_baud_rate: session.serial_baud_rate.map(|b| b.to_string()).unwrap_or_default(),
             serial_data_bits: session.serial_data_bits.unwrap_or(SerialDataBits::Eight),
@@ -718,6 +724,8 @@ struct QuickConnectForm {
     key_passphrase: String,
     /// Viz `Session::term_type` - prazdne = vychozi (`xterm-256color`).
     term_type: String,
+    /// Viz `Session::backspace`.
+    backspace: BackspaceMode,
     /// Viz `NewSessionForm::protocol` - "rychlé spojení" je stejne
     /// legitimni cesta k seriovemu portu jako ulozeny server (zpetna
     /// vazba "aha já ho hledal v rychlém spojení" - puvodne byl COM
@@ -749,6 +757,7 @@ impl Default for QuickConnectForm {
             key_path: String::new(),
             key_passphrase: String::new(),
             term_type: String::new(),
+            backspace: BackspaceMode::Auto,
             protocol: Protocol::Ssh,
             serial_baud_rate: String::new(),
             serial_data_bits: SerialDataBits::Eight,
@@ -788,6 +797,8 @@ struct HomeConnectForm {
     key_passphrase: String,
     /// Viz `Session::term_type` - prazdne = vychozi (`xterm-256color`).
     term_type: String,
+    /// Viz `Session::backspace`.
+    backspace: BackspaceMode,
     /// Viz `NewSessionForm::protocol`/`QuickConnectForm::protocol` -
     /// stejny duvod (zpetna vazba "aha já ho hledal v rychlém spojení").
     protocol: Protocol,
@@ -817,6 +828,7 @@ impl Default for HomeConnectForm {
             key_path: String::new(),
             key_passphrase: String::new(),
             term_type: String::new(),
+            backspace: BackspaceMode::Auto,
             protocol: Protocol::Ssh,
             serial_baud_rate: String::new(),
             serial_data_bits: SerialDataBits::Eight,
@@ -1311,6 +1323,30 @@ fn grid_field_term_type_dropdown(ui: &mut egui::Ui, id_salt: &str, value: &mut S
         .response;
     ui.end_row();
     resp
+}
+
+/// Radek "Backspace posílá:" (viz `Session::backspace`) ve 2-sloupcovem
+/// Gridu formulare serveru - jen u protokolu s terminalem.
+fn grid_field_backspace_dropdown(ui: &mut egui::Ui, tr: &i18n::Strings, id_salt: &str, protocol: Protocol, value: &mut BackspaceMode) {
+    if !matches!(protocol, Protocol::Ssh | Protocol::Telnet | Protocol::Serial | Protocol::Local) {
+        return;
+    }
+    let label = |mode: BackspaceMode| match mode {
+        BackspaceMode::Auto => tr.backspace_auto,
+        BackspaceMode::Del => tr.backspace_del,
+        BackspaceMode::CtrlH => tr.backspace_ctrl_h,
+    };
+    ui.label(tr.field_backspace).on_hover_text(tr.backspace_hover);
+    egui::ComboBox::from_id_salt(id_salt)
+        .selected_text(label(*value))
+        .show_ui(ui, |ui| {
+            for mode in [BackspaceMode::Auto, BackspaceMode::Del, BackspaceMode::CtrlH] {
+                ui.selectable_value(value, mode, label(mode));
+            }
+        })
+        .response
+        .on_hover_text(tr.backspace_hover);
+    ui.end_row();
 }
 
 /// Typy terminalu, ktere pouziva jen Avaya Communication Manager SAT (viz
@@ -2664,6 +2700,13 @@ impl MainApp {
                                     &term_type_suggestions,
                                 );
                                 avaya_port_hint(ui, tr, self.home_connect_form.protocol, &self.home_connect_form.term_type, &self.home_connect_form.port);
+                                grid_field_backspace_dropdown(
+                                    ui,
+                                    tr,
+                                    "home_connect_backspace",
+                                    self.home_connect_form.protocol,
+                                    &mut self.home_connect_form.backspace,
+                                );
 
                                 match self.home_connect_form.protocol {
                                     Protocol::Serial => {}
@@ -2856,6 +2899,7 @@ impl MainApp {
         let id = session.id;
         let term_type = self.home_connect_form.term_type.trim();
         session.term_type = if term_type.is_empty() { None } else { Some(term_type.to_string()) };
+        session.backspace = self.home_connect_form.backspace;
 
         if save {
             if !folder.is_empty() {
@@ -3407,6 +3451,7 @@ impl MainApp {
                         &term_type_suggestions,
                     );
                     avaya_port_hint(ui, tr, form.protocol, &form.term_type, &form.port);
+                    grid_field_backspace_dropdown(ui, tr, "new_session_backspace", form.protocol, &mut form.backspace);
 
                     // Prihlasovaci udaje (heslo/klic) davaji smysl jen pro
                     // SSH - seriova linka zadnou autentizaci nema (viz
@@ -3520,6 +3565,7 @@ impl MainApp {
             }
             let term_type = form.term_type.trim();
             session.term_type = if term_type.is_empty() { None } else { Some(term_type.to_string()) };
+            session.backspace = form.backspace;
             self.vault.data.servers.push(session);
             self.save_vault();
         } else if open {
@@ -3639,6 +3685,7 @@ impl MainApp {
                         &term_type_suggestions,
                     );
                     avaya_port_hint(ui, tr, form.protocol, &form.term_type, &form.port);
+                    grid_field_backspace_dropdown(ui, tr, "edit_session_backspace", form.protocol, &mut form.backspace);
 
                     match form.protocol {
                         Protocol::Serial => {}
@@ -3766,6 +3813,7 @@ impl MainApp {
                 session.group = if folder.is_empty() { None } else { Some(folder.to_string()) };
                 let term_type = form.term_type.trim();
                 session.term_type = if term_type.is_empty() { None } else { Some(term_type.to_string()) };
+                session.backspace = form.backspace;
                 true
             } else {
                 false
@@ -4426,6 +4474,7 @@ impl MainApp {
                         &term_type_suggestions,
                     );
                     avaya_port_hint(ui, tr, form.protocol, &form.term_type, &form.port);
+                    grid_field_backspace_dropdown(ui, tr, "quick_connect_backspace", form.protocol, &mut form.backspace);
 
                     match form.protocol {
                         Protocol::Serial => {}
@@ -4531,6 +4580,7 @@ impl MainApp {
             };
             let term_type = form.term_type.trim();
             session.term_type = if term_type.is_empty() { None } else { Some(term_type.to_string()) };
+            session.backspace = form.backspace;
             let id = session.id;
             self.ad_hoc_sessions.push(session);
             self.open_session_tab(id);

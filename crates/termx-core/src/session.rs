@@ -76,6 +76,24 @@ pub enum SerialFlowControl {
     Hardware,
 }
 
+/// Co posila klavesa Backspace v terminalu - viz `Session::backspace`.
+///
+/// Vetsina zarizeni (Linux, MikroTik, Cisco...) i bezne terminaly (xterm,
+/// PuTTY) pouzivaji DEL (0x7F, `^?`). Nektera zarizeni ale DEL jako
+/// "smaz znak vlevo" neberou a ocekavaji ASCII BS (0x08, `^H`) - overeno
+/// na switchi Huawei (kolega: Backspace nemazal, Ctrl+H ano).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum BackspaceMode {
+    /// DEL, jen u Avaya typu terminalu `w2ktt`/`ntt` Ctrl+H (puvodni
+    /// chovani pred pridanim teto volby).
+    #[default]
+    Auto,
+    /// Vzdy DEL (0x7F).
+    Del,
+    /// Vzdy Ctrl+H (0x08).
+    CtrlH,
+}
+
 /// Zpusob autentizace k cilovemu serveru. Tajne udaje (heslo, pasfrase klice)
 /// nikdy nejsou soucasti `Session` samotne v cistem tvaru na disku - `Session`
 /// je metadata ulozena/serializovana uvnitr sifrovaneho trezoru (termx-vault),
@@ -162,6 +180,11 @@ pub struct Session {
     /// duvodu jako `ftp_use_tls` vyse.
     #[serde(default)]
     pub rdp_domain: Option<String>,
+    /// Co posila Backspace (viz [`BackspaceMode`]) - pro terminalove
+    /// protokoly (SSH/Telnet/seriovy port/mistni terminal).
+    /// `#[serde(default)]` = `Auto` pro stare ulozene servery.
+    #[serde(default)]
+    pub backspace: BackspaceMode,
 }
 
 impl Session {
@@ -183,6 +206,7 @@ impl Session {
             serial_flow_control: None,
             ftp_use_tls: false,
             rdp_domain: None,
+            backspace: BackspaceMode::Auto,
         }
     }
 }

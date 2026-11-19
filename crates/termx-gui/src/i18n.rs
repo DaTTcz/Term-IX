@@ -79,6 +79,12 @@ pub struct Strings {
     /// Label radku pro volitelny terminal type (`Session::term_type`) -
     /// viz `show_new_session_dialog`/`show_edit_session_dialog`.
     pub field_term_type: &'static str,
+    /// "Backspace posílá:" - viz `Session::backspace`.
+    pub field_backspace: &'static str,
+    pub backspace_auto: &'static str,
+    pub backspace_del: &'static str,
+    pub backspace_ctrl_h: &'static str,
+    pub backspace_hover: &'static str,
     /// Viz `app.rs::avaya_port_hint`.
     pub avaya_port_hint: &'static str,
     /// Label radku s prepinacem protokolu (SSH/seriovy port) ve
@@ -435,6 +441,11 @@ pub const CS: Strings = Strings {
     btn_choose_key_file: "Vybrat soubor...",
     field_key_passphrase: "Pasfráze (volitelné):",
     field_term_type: "Typ terminálu:",
+    field_backspace: "Backspace posílá:",
+    backspace_auto: "Automaticky",
+    backspace_del: "DEL (^?)",
+    backspace_ctrl_h: "Ctrl+H (^H)",
+    backspace_hover: "Co pošle klávesa Backspace. Většina zařízení chce DEL. Pokud Backspace nemaže (např. některé switche Huawei) a Ctrl+H ano, zvol Ctrl+H.\nAutomaticky = DEL, u Avaya typů terminálu w2ktt/ntt Ctrl+H.",
     avaya_port_hint: "⚠ Avaya SAT běží obvykle na portu 5022 (port 22 vede do Linuxu).",
     field_protocol: "Protokol:",
     protocol_ssh: "SSH",
@@ -701,6 +712,11 @@ pub const EN: Strings = Strings {
     btn_choose_key_file: "Choose file...",
     field_key_passphrase: "Passphrase (optional):",
     field_term_type: "Terminal type:",
+    field_backspace: "Backspace sends:",
+    backspace_auto: "Automatic",
+    backspace_del: "DEL (^?)",
+    backspace_ctrl_h: "Ctrl+H (^H)",
+    backspace_hover: "What the Backspace key sends. Most devices expect DEL. If Backspace does not erase (e.g. some Huawei switches) but Ctrl+H does, choose Ctrl+H.\nAutomatic = DEL, Ctrl+H for Avaya terminal types w2ktt/ntt.",
     avaya_port_hint: "⚠ Avaya SAT usually runs on port 5022 (port 22 leads to Linux).",
     field_protocol: "Protocol:",
     protocol_ssh: "SSH",

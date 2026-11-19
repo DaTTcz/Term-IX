@@ -136,7 +136,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
 
-use termx_core::{AuthMethod, Protocol, Session};
+use termx_core::{AuthMethod, BackspaceMode, Protocol, Session};
 use termx_local::{spawn_local_session, LocalEvent, LocalHandle, LocalInput};
 use termx_serial::{spawn_serial_session, SerialEvent, SerialHandle, SerialInput};
 use termx_ssh::{spawn_ssh_session, SshEvent, SshHandle, SshInput, SystemStats};
@@ -1079,7 +1079,7 @@ impl TerminalSession {
                     // ocekavano ("skáčou po formuláři místo aby se
                     // posouvaly v textu").
                     let app_cursor_keys = self.term.mode().contains(TermMode::APP_CURSOR);
-                    if let Some(bytes) = key_to_bytes(key, modifiers, self.session.term_type.as_deref(), app_cursor_keys) {
+                    if let Some(bytes) = key_to_bytes(key, modifiers, self.session.term_type.as_deref(), self.session.backspace, app_cursor_keys) {
                         self.send_bytes(bytes);
                         sent_input = true;
                     }
@@ -2084,7 +2084,13 @@ fn indexed_color(idx: u8) -> egui::Color32 {
 /// `handle_keyboard`) na bajty/ANSI escape sekvenci, kterou ocekava
 /// vzdaleny shell - standardni VT100/xterm konvence (sipky, Ctrl+pismeno
 /// jako ridici znak, ...).
-fn key_to_bytes(key: egui::Key, modifiers: egui::Modifiers, term_type: Option<&str>, app_cursor_keys: bool) -> Option<Vec<u8>> {
+fn key_to_bytes(
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+    term_type: Option<&str>,
+    backspace_mode: BackspaceMode,
+    app_cursor_keys: bool,
+) -> Option<Vec<u8>> {
     use egui::Key;
 
     // Ctrl+Tab je VYHRAZENA globalni zkratka pro prepnuti fokusu mezi
@@ -2149,10 +2155,16 @@ fn key_to_bytes(key: egui::Key, modifiers: egui::Modifiers, term_type: Option<&s
     // Telnet klienta, ktery historicky posilal prave 0x08.
     // NEOVERENO NA ZIVO (na rozdil od F-klaves vyse) - je to nejlepsi
     // dostupny odhad, ne potvrzeny fakt.
-    let backspace: &[u8] = match term_type {
-        Some("w2ktt") | Some("ntt") => b"\x08",
-        _ => b"\x7f",
+    //
+    // Volba v profilu serveru (`Session::backspace`) ma prednost - napr.
+    // switche Huawei taky chteji Ctrl+H (overeno: Backspace nemazal,
+    // Ctrl+H ano). `Auto` = puvodni chovani podle typu terminalu.
+    let ctrl_h = match backspace_mode {
+        BackspaceMode::CtrlH => true,
+        BackspaceMode::Del => false,
+        BackspaceMode::Auto => matches!(term_type, Some("w2ktt") | Some("ntt")),
     };
+    let backspace: &[u8] = if ctrl_h { b"\x08" } else { b"\x7f" };
 
     // Sipky - viz `app_cursor_keys` v `handle_keyboard` (DECCKM: server
     // muze pozadat o "aplikacni" rezim, kdy se misto `ESC [ <pismeno>`

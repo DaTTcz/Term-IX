@@ -17,6 +17,7 @@ pub use error::CoreError;
 pub use module::{ConnectionContext, ProtocolModule};
 pub use registry::ModuleRegistry;
 pub use session::{
+    BackspaceMode,
     AuthMethod, Protocol, SerialDataBits, SerialFlowControl, SerialParity, SerialStopBits, Session,
 };
 
