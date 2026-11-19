@@ -277,8 +277,15 @@ jobs:
               fi ;;
             none)
               # tar.gz/AppImage nic neinstaluji - libudev musi byt v systemu
-              # (na beznem desktopu vzdy je, v holem kontejneru byt nemusi).
-              pacman -Sy --noconfirm --needed systemd-libs ;;
+              # (na beznem desktopu vzdy je; v archlinux kontejneru je
+              # soucasti zakladu). Doinstaluje se jen kdyby chybela - a pak
+              # s plnym `-Syu`, protoze samotne `-Sy <balik>` (castecny
+              # upgrade) na Archu selhava na zavislostech (v0.9.1).
+              if ldconfig -p | grep -q 'libudev\.so\.1'; then
+                echo "libudev.so.1 je v systemu"
+              else
+                pacman -Syu --noconfirm --needed systemd-libs
+              fi ;;
           esac
       - name: Spusteni (--version)
         shell: bash
