@@ -1539,7 +1539,9 @@ impl MainApp {
             update_rx: None,
             update_install: UpdateInstall::NotStarted,
             install_rx: None,
-            own_exe_path: std::env::current_exe().ok(),
+            // U AppImage `.AppImage` soubor, ne binarka v /tmp/.mount_*
+            // (viz `termx_update::launch_path`).
+            own_exe_path: termx_update::launch_path(),
             status_message: None,
             about_dialog_open: false,
             split_marks: Vec::new(),
@@ -1593,7 +1595,9 @@ impl MainApp {
             update_rx: None,
             update_install: UpdateInstall::NotStarted,
             install_rx: None,
-            own_exe_path: std::env::current_exe().ok(),
+            // U AppImage `.AppImage` soubor, ne binarka v /tmp/.mount_*
+            // (viz `termx_update::launch_path`).
+            own_exe_path: termx_update::launch_path(),
             status_message: None,
             about_dialog_open: false,
             split_marks: Vec::new(),
@@ -2405,12 +2409,16 @@ impl MainApp {
                 // rezervou pro delsi CS/EN texty) pro vypocet mezery vlevo,
                 // zadne dalsi omezeni sirky uvnitr netreba.
                 const UPDATE_BUTTONS_WIDTH: f32 = 300.0;
+                let is_package_install = termx_update::install_mode() == termx_update::InstallMode::Package;
                 let avail = ui.available_width();
                 ui.horizontal(|ui| {
                     if avail > UPDATE_BUTTONS_WIDTH {
                         ui.add_space((avail - UPDATE_BUTTONS_WIDTH) / 2.0);
                     }
-                    if ui.button(tr.btn_update_now).clicked() {
+                    // Instalace z balicku (.deb/.rpm v /usr) se sama
+                    // prepisovat nesmi - jen odkaz na stranku releasu
+                    // (stejne jako eR Commander), viz napoveda pod tim.
+                    if !is_package_install && ui.button(tr.btn_update_now).clicked() {
                         self.start_update_install();
                     }
                     if ui.button(tr.btn_open_release_page).clicked() {
@@ -2420,6 +2428,9 @@ impl MainApp {
                         });
                     }
                 });
+                if is_package_install {
+                    ui.label(egui::RichText::new(tr.update_package_hint).small());
+                }
             }
             UpdateCheck::Failed(e) => {
                 ui.label(egui::RichText::new(i18n::update_check_failed(self.settings.lang, e)).small());

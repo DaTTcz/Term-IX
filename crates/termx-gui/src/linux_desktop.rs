@@ -63,6 +63,21 @@ fn xdg_data_home() -> Option<std::path::PathBuf> {
 pub fn install() {
     let Some(data_home) = xdg_data_home() else { return };
 
+    // Instalace z balicku (.deb/.rpm) si nese vlastni zastupce a ikony v
+    // /usr/share - uzivatelsky `.desktop` (napr. z drivejsi prenosne
+    // verze) by ho prekryl a mohl ukazovat na starou cestu, takze se
+    // uklidi a nic se nezapisuje (stejne jako v eR Commanderu).
+    if termx_update::install_mode() == termx_update::InstallMode::Package {
+        let user_entry = data_home.join("applications/term-ix.desktop");
+        if std::fs::remove_file(&user_entry).is_ok() {
+            spawn_quiet("update-desktop-database", &[data_home.join("applications").as_os_str()]);
+            if !spawn_quiet("kbuildsycoca6", &[]) {
+                spawn_quiet("kbuildsycoca5", &[]);
+            }
+        }
+        return;
+    }
+
     let mut changed = false;
     match install_desktop_file(&data_home) {
         Ok(c) => changed |= c,
@@ -109,7 +124,11 @@ fn install_desktop_file(data_home: &std::path::Path) -> std::io::Result<bool> {
     // binarky - zadna pevna instalacni cesta jako `/usr/bin/term-ix`
     // tu nedava smysl (aplikace nema instalator, uzivatel si ji
     // rozbaluje kamkoliv), takze se zjistuje za behu.
-    let exe = std::env::current_exe()?;
+    //
+    // U AppImage je to samotny .AppImage soubor - `current_exe()` by
+    // ukazovalo do docasneho `/tmp/.mount_*`, ktere po zavreni appky
+    // zmizi (viz `termx_update::launch_path`).
+    let exe = termx_update::launch_path().ok_or_else(|| std::io::Error::other("nelze zjistit cestu k programu"))?;
     let exe = exe.to_string_lossy();
 
     let contents = format!(

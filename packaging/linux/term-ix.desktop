@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Term-IX
+GenericName=Terminálový klient
+Comment=Modulární terminálový klient (SSH/Telnet/Serial/FTP/RDP)
+Exec=term-ix
+Icon=term-ix
+Terminal=false
+Categories=Network;RemoteAccess;System;TerminalEmulator;
+StartupNotify=true
+StartupWMClass=term-ix

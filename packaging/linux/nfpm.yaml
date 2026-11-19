@@ -1,0 +1,54 @@
+# Popis .deb a .rpm balicku pro nfpm (https://nfpm.goreleaser.com) -
+# prevzato z eR Commanderu. VERSION dosazuje workflow
+# (.github/workflows/release.yml) z tagu.
+# Binarka jde do /usr/bin - appka to pozna (`termx_update::InstallMode::Package`)
+# a misto samo-aktualizace nabidne stranku s novym balickem; vlastni
+# zastupce v ~/.local/share/applications si v tom pripade nezapisuje
+# (balicek ho ma v /usr/share/applications).
+name: term-ix
+arch: amd64
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: David Trubka (DaTT.cz)
+vendor: DaTT.cz
+homepage: https://github.com/DaTTcz/Term-IX
+license: PolyForm-Noncommercial-1.0.0
+description: |
+  Modularni terminalovy klient (Rust/egui) - SSH, Telnet, seriovy port,
+  FTP/FTPS, SFTP, RDP a mistni terminal; sifrovany trezor serveru.
+
+contents:
+  - src: ./dist/term-ix
+    dst: /usr/bin/term-ix
+    file_info:
+      mode: 0755
+  - src: ./packaging/linux/term-ix.desktop
+    dst: /usr/share/applications/term-ix.desktop
+  - src: ./assets/icons/hicolor/16x16/apps/term-ix.png
+    dst: /usr/share/icons/hicolor/16x16/apps/term-ix.png
+  - src: ./assets/icons/hicolor/32x32/apps/term-ix.png
+    dst: /usr/share/icons/hicolor/32x32/apps/term-ix.png
+  - src: ./assets/icons/hicolor/48x48/apps/term-ix.png
+    dst: /usr/share/icons/hicolor/48x48/apps/term-ix.png
+  - src: ./assets/icons/hicolor/64x64/apps/term-ix.png
+    dst: /usr/share/icons/hicolor/64x64/apps/term-ix.png
+  - src: ./assets/icons/hicolor/128x128/apps/term-ix.png
+    dst: /usr/share/icons/hicolor/128x128/apps/term-ix.png
+  - src: ./assets/icons/hicolor/256x256/apps/term-ix.png
+    dst: /usr/share/icons/hicolor/256x256/apps/term-ix.png
+  - src: ./assets/icons/hicolor/512x512/apps/term-ix.png
+    dst: /usr/share/icons/hicolor/512x512/apps/term-ix.png
+
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.35)
+      # Seriovy port (`termx-serial`, crate `serialport`)
+      - libudev1
+  rpm:
+    depends:
+      # Nazev balicku se lisi (Fedora systemd-libs, openSUSE libudev1) -
+      # zavislost na samotne knihovne funguje v obou.
+      - libudev.so.1()(64bit)
